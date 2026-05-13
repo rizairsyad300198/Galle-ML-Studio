@@ -77,6 +77,8 @@ class GalleMLStudio(ctk.CTk):
 
         self.is_training = False
 
+        self.cancel_training = False
+
         # =====================================================
         # NEW OUTLIER EVALUATION STATE
         # =====================================================
@@ -226,55 +228,148 @@ class GalleMLStudio(ctk.CTk):
 
         self.outlier_recommendations = state.get("outlier_recommendations", {})
 
-        results_dir = os.path.join("projects", self.current_project, "results")
-
-        if os.path.exists(results_dir):
-
-            for file in os.listdir(results_dir):
-
-                if file.endswith("_scored.csv"):
-
-                    model_name = (
-                        file.replace("_scored.csv", "").replace("_", " ").title()
-                    )
-
-                    try:
-
-                        path = os.path.join(results_dir, file)
-
-                        self.scored_datasets[model_name] = pd.read_csv(path)
-
-                    except Exception as e:
-
-                        print(f"Load scored dataset error: {e}")
-
         # =====================================================
-        # LOAD DATASET
+        # SHOW WORKSPACE DULU, BARU LOAD BERAT DI BACKGROUND
         # =====================================================
-
-        if self.dataset_path and os.path.exists(self.dataset_path):
-
-            self.df = pd.read_csv(self.dataset_path)
-
-        # =====================================================
-        # LOAD MODEL
-        # =====================================================
-
-        if self.selected_best_model_path and os.path.exists(
-            self.selected_best_model_path
-        ):
-
-            loaded = joblib.load(self.selected_best_model_path)
-
-            self.selected_best_model = loaded["pipeline"]
-
-            self.label_encoder = loaded.get("label_encoder")
-
-            self.datetime_cols_for_prediction = loaded.get("datetime_cols", [])
-
-            self.feature_column_types = loaded.get("feature_column_types", {})
 
         self.show_workspace()
+
+        # Tampilkan loading overlay setelah workspace siap
+        if self.workspace_screen:
+
+            self.workspace_screen.show_loading_overlay("Memuat project...")
+
+            self.update()
+
+        # Jalankan load berat di thread terpisah
+        threading.Thread(
+            target=self._load_project_heavy,
+            args=(state,),
+            daemon=True,
+        ).start()
+
+    def _load_project_heavy(self, state):
+        """Load dataset & model di background thread, lalu hide overlay."""
+
+        try:
+
+            # =====================================================
+            # LOAD SCORED DATASETS
+            # =====================================================
+
+            results_dir = os.path.join("projects", self.current_project, "results")
+
+            if os.path.exists(results_dir):
+
+                for file in os.listdir(results_dir):
+
+                    if file.endswith("_scored.csv"):
+
+                        model_name = (
+                            file.replace("_scored.csv", "").replace("_", " ").title()
+                        )
+
+                        try:
+
+                            path = os.path.join(results_dir, file)
+
+                            self.scored_datasets[model_name] = pd.read_csv(path)
+
+                        except Exception as e:
+
+                            print(f"Load scored dataset error: {e}")
+
+            # =====================================================
+            # LOAD DATASET
+            # =====================================================
+
+            if self.dataset_path and os.path.exists(self.dataset_path):
+
+                self.after(
+                    0,
+                    lambda: self.workspace_screen
+                    and self.workspace_screen.loading_message_label
+                    and self.workspace_screen.loading_message_label.configure(
+                        text="Membaca dataset..."
+                    ),
+                )
+
+                self.df = pd.read_csv(self.dataset_path)
+
+            # =====================================================
+            # LOAD MODEL
+            # =====================================================
+
+            if self.selected_best_model_path and os.path.exists(
+                self.selected_best_model_path
+            ):
+
+                self.after(
+                    0,
+                    lambda: self.workspace_screen
+                    and self.workspace_screen.loading_message_label
+                    and self.workspace_screen.loading_message_label.configure(
+                        text="Memuat model..."
+                    ),
+                )
+
+                loaded = joblib.load(self.selected_best_model_path)
+
+                self.selected_best_model = loaded["pipeline"]
+
+                self.label_encoder = loaded.get("label_encoder")
+
+                self.datetime_cols_for_prediction = loaded.get("datetime_cols", [])
+
+                self.feature_column_types = loaded.get("feature_column_types", {})
+
+        except Exception as e:
+
+            print(f"Load project error: {e}")
+
+        finally:
+
+            # Setelah semua selesai, hide overlay dan navigate ke fase yang benar
+            self.after(0, self._finish_load_project)
+
+    def _finish_load_project(self):
+        """Dipanggil di main thread setelah load selesai."""
+
+        if self.workspace_screen:
+
+            self.workspace_screen.hide_loading_overlay()
+
+        last_phase = self.project_manager.load_state(self.current_project).get(
+            "last_phase", "upload"
+        )
+
+        if not self.workspace_screen:
+            return
+
+        ws = self.workspace_screen
+
+        # Aktifkan sidebar sesuai state
+        if self.training_results:
+
+            ws.sidebar_steps["results"].configure(state="normal")
+            ws.sidebar_steps["try_model"].configure(state="normal")
+            ws.sidebar_steps["export_model"].configure(state="normal")
+
+            # Selalu navigate ke results jika training sudah ada
+            ws._go_to_main_step(ws.MAIN_STEP_RESULTS)
+
+        elif self.df is not None and self.inferred_task:
+
+            # Training belum selesai/dibatalkan, kembali ke configure
+            ws._go_to_main_step(ws.MAIN_STEP_CONFIGURE)
+
+        elif self.df is not None:
+
+            ws._go_to_main_step(ws.MAIN_STEP_UPLOAD)  # show dataset preview
+
+        else:
+
+            ws._go_to_main_step(ws.MAIN_STEP_UPLOAD)
 
     # =========================================================
     # DATASET
@@ -310,10 +405,6 @@ class GalleMLStudio(ctk.CTk):
 
             self._save_current_state("upload")
 
-            if self.workspace_screen:
-
-                self.workspace_screen.show_dataset_screen()
-
         except Exception as e:
 
             messagebox.showerror("Upload Error", str(e))
@@ -341,6 +432,8 @@ class GalleMLStudio(ctk.CTk):
 
             self.is_training = True
 
+            self.cancel_training = False
+
             if self.workspace_screen:
 
                 self.workspace_screen.set_training_state(True)
@@ -356,14 +449,25 @@ class GalleMLStudio(ctk.CTk):
                 test_size=1 - split_ratio,
             )
 
+            # Cek cancel sebelum mulai
+            if self.cancel_training:
+                return
+
             (
                 self.training_results,
                 self.all_trained_models,
             ) = trainer.train(self.selected_models)
 
+            # Cek cancel setelah training
+            if self.cancel_training:
+                self.training_results = None
+                self.all_trained_models = {}
+                return
+
             self.score_stats = trainer.score_stats
 
             self.feature_stats = trainer.feature_stats
+
             # =================================================
             # SAVE NEW EVALUATION DATA
             # =================================================
@@ -375,6 +479,7 @@ class GalleMLStudio(ctk.CTk):
             self.training_durations = trainer.training_durations
 
             self._save_scored_datasets()
+
             # =================================================
             # SUMMARY / INSIGHT / RECOMMENDATION
             # =================================================
@@ -448,12 +553,16 @@ class GalleMLStudio(ctk.CTk):
 
         except Exception as e:
 
-            error_message = str(e)
+            if not self.cancel_training:
 
-            self.after(
-                0,
-                lambda msg=error_message: messagebox.showerror("Training Error", msg),
-            )
+                error_message = str(e)
+
+                self.after(
+                    0,
+                    lambda msg=error_message: messagebox.showerror(
+                        "Training Error", msg
+                    ),
+                )
 
         finally:
 
@@ -470,11 +579,7 @@ class GalleMLStudio(ctk.CTk):
     # MODEL
     # =========================================================
 
-    def set_selected_best_model(
-        self,
-        model_name,
-        model_pipeline,
-    ):
+    def set_selected_best_model(self, model_name, model_pipeline):
 
         self.selected_best_model_name = model_name
 
@@ -602,13 +707,6 @@ class GalleMLStudio(ctk.CTk):
             "training_results": self.training_results,
             "selected_best_model_name": self.selected_best_model_name,
             "selected_best_model_path": self.selected_best_model_path,
-            # =========================================
-            # NEW STATE
-            # =========================================
-            "training_durations": self.training_durations,
-            "outlier_summary": self.outlier_summary,
-            "outlier_insights": self.outlier_insights,
-            "outlier_recommendations": self.outlier_recommendations,
             "training_durations": self.training_durations,
             "outlier_summary": self.outlier_summary,
             "outlier_insights": self.outlier_insights,

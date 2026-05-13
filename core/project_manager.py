@@ -17,7 +17,6 @@ class ProjectManager:
         os.makedirs(os.path.join(path, "datasets"), exist_ok=True)
         os.makedirs(os.path.join(path, "results"), exist_ok=True)
 
-        # Initial state
         self.save_state(name, {"created": datetime.now().isoformat()})
 
     def list_projects(self):
@@ -37,7 +36,7 @@ class ProjectManager:
         path = os.path.join(self.projects_dir, name)
         if not os.path.exists(path):
             raise FileNotFoundError(f"Project '{name}' not found")
-        
+
         shutil.rmtree(path)
 
     def load_state(self, project_name: str) -> dict:

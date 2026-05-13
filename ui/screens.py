@@ -151,7 +151,6 @@ class WorkspaceScreen:
         self.model_vars = {}
         self.feature_vars = {}
         self.split_var = None
-        self.progress_bar = None
         self.train_btn = None
         self.target_warning_label = None
         self._target_next_btn = None
@@ -174,40 +173,34 @@ class WorkspaceScreen:
     #  RENDER & SETUP
     # ─────────────────────────────────────────────────────────────────────────
     def render(self):
-        # ── Pastikan app root grid bisa expand row=1 penuh ──────────────────
         self.app.grid_rowconfigure(0, weight=0)
-        self.app.grid_rowconfigure(1, weight=1)  # <── FIX: row 1 expand penuh
+        self.app.grid_rowconfigure(1, weight=1)
         self.app.grid_columnconfigure(0, weight=0)
         self.app.grid_columnconfigure(1, weight=1)
 
-        # ── Sidebar full-height ──────────────────────────────────────────────
         sidebar = ctk.CTkFrame(self.app, width=280, corner_radius=0, fg_color="#202225")
         sidebar.grid(row=1, column=0, sticky="nsew")
-        sidebar.grid_propagate(False)  # <── FIX: jaga lebar sidebar tetap 280
+        sidebar.grid_propagate(False)
 
-        # ── Content frame full-height ────────────────────────────────────────
         self.content_frame = ctk.CTkFrame(self.app)
         self.content_frame.grid(
             row=1, column=1, sticky="nsew", padx=(0, 15), pady=(0, 10)
         )
-        self.content_frame.grid_rowconfigure(0, weight=1)  # main_area expand
-        self.content_frame.grid_rowconfigure(1, weight=0)  # nav_area fixed
+        self.content_frame.grid_rowconfigure(0, weight=1)
+        self.content_frame.grid_rowconfigure(1, weight=0)
         self.content_frame.grid_columnconfigure(0, weight=1)
 
-        # ── Main area (konten utama) ─────────────────────────────────────────
         self.main_area = ctk.CTkFrame(self.content_frame, fg_color="transparent")
         self.main_area.grid(row=0, column=0, sticky="nsew")
         self.main_area.grid_columnconfigure(0, weight=1)
-        # Beri weight=1 ke semua baris agar konten bisa stretch
         for i in range(20):
             self.main_area.grid_rowconfigure(i, weight=1)
 
-        # ── Nav area (tombol Back/Next) ──────────────────────────────────────
         self.nav_area = ctk.CTkFrame(
             self.content_frame, fg_color="transparent", height=70
         )
         self.nav_area.grid(row=1, column=0, sticky="ew", padx=10, pady=(10, 15))
-        self.nav_area.grid_propagate(False)  # <── FIX: jaga tinggi nav 70px
+        self.nav_area.grid_propagate(False)
 
         self._setup_sidebar(sidebar)
         self._setup_training_overlay()
@@ -270,15 +263,81 @@ class WorkspaceScreen:
             font=ctk.CTkFont(family="Arial", size=16),
             text_color="gray70",
         )
-        self.training_time_label.pack(pady=(0, 30))
+        self.training_time_label.pack(pady=(0, 20))
+
+        ctk.CTkButton(
+            container,
+            text="✖ Cancel Training",
+            width=200,
+            height=44,
+            fg_color="#7f1d1d",
+            hover_color="#991b1b",
+            font=ctk.CTkFont(family="Arial", size=15, weight="bold"),
+            command=self._confirm_cancel_training,
+        ).pack(pady=(10, 0))
+
+    def _confirm_cancel_training(self):
+        popup = ctk.CTkToplevel(self.app)
+        popup.title("Cancel Training")
+        popup.geometry("400x200")
+        popup.grab_set()
+        popup.resizable(False, False)
+
+        self.app.update_idletasks()
+        x = self.app.winfo_rootx() + self.app.winfo_width() // 2 - 200
+        y = self.app.winfo_rooty() + self.app.winfo_height() // 2 - 100
+        popup.geometry(f"400x200+{x}+{y}")
+
+        ctk.CTkLabel(
+            popup,
+            text="Batalkan Training?",
+            font=ctk.CTkFont(family="Arial", size=20, weight="bold"),
+        ).pack(pady=(30, 8))
+        ctk.CTkLabel(
+            popup,
+            text="Proses training akan dihentikan.\nHasil yang belum selesai akan hilang.",
+            font=ctk.CTkFont(family="Arial", size=14),
+            text_color="gray60",
+            justify="center",
+        ).pack(pady=(0, 20))
+
+        btn_frame = ctk.CTkFrame(popup, fg_color="transparent")
+        btn_frame.pack()
+
+        ctk.CTkButton(
+            btn_frame,
+            text="Ya, Cancel",
+            width=140,
+            height=40,
+            fg_color="#e74c3c",
+            hover_color="#c0392b",
+            font=ctk.CTkFont(weight="bold"),
+            command=lambda: self._do_cancel_training(popup),
+        ).pack(side="left", padx=8)
+
+        ctk.CTkButton(
+            btn_frame,
+            text="Lanjutkan",
+            width=140,
+            height=40,
+            fg_color="#555",
+            hover_color="#666",
+            command=popup.destroy,
+        ).pack(side="left", padx=8)
+
+    def _do_cancel_training(self, popup):
+        popup.destroy()
+        self.app.cancel_training = True
+        self.set_training_state(False)
+        # Kembali ke configure, UI akan restore dari app state (selected_models,
+        # selected_features, target_column, split dsb sudah tersimpan sebelum training)
+        self._go_to_main_step(self.MAIN_STEP_CONFIGURE)
 
     def _setup_sidebar(self, sidebar):
-        # FIX: gunakan grid yang benar-benar full-height
-        # Baris 0 = judul, 1-7 = tombol, 8 = progress bar, 9 = info, 10 = spacer
         sidebar.grid_columnconfigure(0, weight=1)
-        for r in range(11):
+        for r in range(10):
             sidebar.grid_rowconfigure(r, weight=0)
-        sidebar.grid_rowconfigure(10, weight=1)  # spacer bawah expand
+        sidebar.grid_rowconfigure(9, weight=1)
 
         ctk.CTkLabel(
             sidebar,
@@ -313,12 +372,8 @@ class WorkspaceScreen:
             btn.grid(row=row_idx, column=0, pady=8, padx=20, sticky="ew")
             self.sidebar_steps[key] = btn
 
-        self.progress_bar = ctk.CTkProgressBar(sidebar, width=240, height=10)
-        self.progress_bar.set(0)
-        self.progress_bar.grid(row=8, column=0, pady=(20, 10), padx=20, sticky="ew")
-
         info_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
-        info_frame.grid(row=9, column=0, pady=30, padx=20, sticky="ew")
+        info_frame.grid(row=8, column=0, pady=30, padx=20, sticky="ew")
         info_frame.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             info_frame,
@@ -501,7 +556,6 @@ class WorkspaceScreen:
             self.show_dataset_screen()
             return
 
-        # Reset semua row ke weight=0 dulu, lalu atur yang perlu
         for i in range(20):
             self.main_area.grid_rowconfigure(i, weight=0)
         self.main_area.grid_rowconfigure(0, weight=1)
@@ -540,7 +594,10 @@ class WorkspaceScreen:
             filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
         )
         if filepath:
+            self.show_loading_overlay("Membaca dataset...")
+            self.app.update()
             self.app.upload_dataset(filepath)
+            self.hide_loading_overlay()
             self._go_to_main_step(self.MAIN_STEP_UPLOAD)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -584,19 +641,94 @@ class WorkspaceScreen:
             command=self.show_upload_dialog,
         ).grid(row=0, column=1, rowspan=2, sticky="e")
 
-        preview_frame = ctk.CTkScrollableFrame(
-            self.main_area, label_text="Data Preview (15 baris pertama)"
+        table_container = ctk.CTkFrame(
+            self.main_area, fg_color="#1e1e1e", corner_radius=10
         )
-        preview_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0), padx=20)
-        preview_frame.grid_rowconfigure(0, weight=1)
-        preview_frame.grid_columnconfigure(0, weight=1)
+        table_container.grid(row=1, column=0, sticky="nsew", pady=(10, 0), padx=20)
+        table_container.grid_rowconfigure(0, weight=0)
+        table_container.grid_rowconfigure(1, weight=1)
+        table_container.grid_columnconfigure(0, weight=1)
 
-        text_area = ctk.CTkTextbox(
-            preview_frame, height=450, font=("Consolas", 12), border_spacing=12
+        ctk.CTkLabel(
+            table_container,
+            text="Data Preview (15 baris pertama)",
+            font=ctk.CTkFont(family="Arial", size=14, weight="bold"),
+            text_color="gray60",
+            anchor="w",
+        ).grid(row=0, column=0, sticky="w", padx=16, pady=(12, 6))
+
+        tree_frame = ctk.CTkFrame(table_container, fg_color="transparent")
+        tree_frame.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
+        tree_frame.grid_rowconfigure(0, weight=1)
+        tree_frame.grid_columnconfigure(0, weight=1)
+
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure(
+            "DataTable.Treeview",
+            background="#2b2d30",
+            foreground="white",
+            rowheight=28,
+            fieldbackground="#2b2d30",
+            bordercolor="#3d4045",
+            borderwidth=0,
+            font=("Consolas", 12),
         )
-        text_area.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
-        text_area.insert("1.0", self.app.df.head(15).to_string())
-        text_area.configure(state="disabled")
+        style.configure(
+            "DataTable.Treeview.Heading",
+            background="#1a1c1e",
+            foreground="#3498db",
+            font=("Arial", 12, "bold"),
+            relief="flat",
+            borderwidth=0,
+        )
+        style.map(
+            "DataTable.Treeview",
+            background=[("selected", "#3498db")],
+            foreground=[("selected", "white")],
+        )
+        style.map(
+            "DataTable.Treeview.Heading",
+            background=[("active", "#252729")],
+        )
+
+        preview_df = self.app.df.head(15)
+        columns = list(preview_df.columns)
+
+        tree = ttk.Treeview(
+            tree_frame,
+            columns=columns,
+            show="headings",
+            style="DataTable.Treeview",
+        )
+
+        col_width = max(
+            100, min(200, (self.app.winfo_width() - 320) // max(len(columns), 1))
+        )
+        for col in columns:
+            col_str = str(col)
+            display = col_str if len(col_str) <= 18 else col_str[:16] + "…"
+            tree.heading(col, text=display, anchor="w")
+            tree.column(col, width=col_width, minwidth=80, anchor="w")
+
+        tree.tag_configure("odd", background="#2b2d30")
+        tree.tag_configure("even", background="#252729")
+
+        for i, (_, row) in enumerate(preview_df.iterrows()):
+            tag = "odd" if i % 2 == 0 else "even"
+            values = []
+            for v in row:
+                s = str(v)
+                values.append(s if len(s) <= 30 else s[:28] + "…")
+            tree.insert("", "end", values=values, tags=(tag,))
+
+        v_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+        h_scroll = ttk.Scrollbar(tree_frame, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=v_scroll.set, xscrollcommand=h_scroll.set)
+
+        tree.grid(row=0, column=0, sticky="nsew")
+        v_scroll.grid(row=0, column=1, sticky="ns")
+        h_scroll.grid(row=1, column=0, sticky="ew")
 
         self._nav_buttons(
             show_back=False,
@@ -717,13 +849,12 @@ class WorkspaceScreen:
 
         is_anomaly = getattr(self.app, "inferred_task", "") == "anomaly"
 
-        # Reset semua row
         for i in range(20):
             self.main_area.grid_rowconfigure(i, weight=0)
-        self.main_area.grid_rowconfigure(0, weight=0)  # title bar
-        self.main_area.grid_rowconfigure(1, weight=0)  # tab bar
-        self.main_area.grid_rowconfigure(2, weight=0)  # separator
-        self.main_area.grid_rowconfigure(3, weight=1)  # wizard area — EXPAND
+        self.main_area.grid_rowconfigure(0, weight=0)
+        self.main_area.grid_rowconfigure(1, weight=0)
+        self.main_area.grid_rowconfigure(2, weight=0)
+        self.main_area.grid_rowconfigure(3, weight=1)
         self.main_area.grid_columnconfigure(0, weight=1)
 
         title_bar = ctk.CTkFrame(self.main_area, fg_color="transparent")
@@ -768,18 +899,33 @@ class WorkspaceScreen:
         sep = ctk.CTkFrame(self.main_area, height=2, fg_color="#3d4045")
         sep.grid(row=2, column=0, sticky="ew", padx=30, pady=(8, 0))
 
-        # FIX: _wizard_area mengisi sisa ruang vertikal
         self._wizard_area = ctk.CTkFrame(self.main_area, fg_color="transparent")
         self._wizard_area.grid(row=3, column=0, sticky="nsew", padx=30, pady=(10, 10))
         self._wizard_area.grid_columnconfigure(0, weight=1)
         self._wizard_area.grid_rowconfigure(0, weight=1)
 
         self._placeholder = "-- Select Target --"
-        self.target_var = ctk.StringVar(value=self._placeholder)
-        self.split_var = ctk.StringVar(value="80/20 (Recommended)")
-        self._target_selected = is_anomaly
 
-        self._go_to_step(0)
+        # ── RESTORE target_var dari app state ─────────────────────────────────
+        saved_target = getattr(self.app, "target_column", None) or self._placeholder
+        self.target_var = ctk.StringVar(
+            value=saved_target if not is_anomaly else self._placeholder
+        )
+
+        # ── RESTORE split_var dari app state ──────────────────────────────────
+        saved_split = getattr(self.app, "train_test_split", "80/20 (Recommended)")
+        self.split_var = ctk.StringVar(value=saved_split)
+
+        # target dianggap sudah dipilih jika ada saved value
+        self._target_selected = is_anomaly or (
+            saved_target and saved_target != self._placeholder
+        )
+
+        # ── Jika anomaly, langsung ke fitur; jika tidak, mulai dari target ────
+        if is_anomaly:
+            self._go_to_step(0)
+        else:
+            self._go_to_step(0)
 
     def _try_go_to_step(self, idx: int):
         is_anomaly = getattr(self.app, "inferred_task", "") == "anomaly"
@@ -915,11 +1061,9 @@ class WorkspaceScreen:
 
     # ── Sub-step 0: TARGET ────────────────────────────────────────────────────
     def _build_step_target(self, parent):
-        # FIX: parent adalah _wizard_area yang sudah punya weight=1 di row 0
-        # Jadi kita atur row di dalam parent ini
         for i in range(10):
             parent.grid_rowconfigure(i, weight=0)
-        parent.grid_rowconfigure(5, weight=1)  # preview expand
+        parent.grid_rowconfigure(5, weight=1)
         parent.grid_columnconfigure(0, weight=1)
 
         columns = list(self.app.df.columns)
@@ -988,6 +1132,15 @@ class WorkspaceScreen:
                     break
             except Exception:
                 pass
+
+        # ── Jika target sudah dipilih sebelumnya (restore state), load preview ──
+        current_val = self.target_var.get()
+        if (
+            current_val
+            and current_val != self._placeholder
+            and current_val in self.app.df.columns
+        ):
+            self._on_target_changed(current_val)
 
     def _on_target_changed(self, value=None, *_):
         selected = self.target_var.get()
@@ -1157,7 +1310,7 @@ class WorkspaceScreen:
     def _build_step_features(self, parent):
         for i in range(10):
             parent.grid_rowconfigure(i, weight=0)
-        parent.grid_rowconfigure(3, weight=1)  # scroll expand
+        parent.grid_rowconfigure(3, weight=1)
         parent.grid_columnconfigure(0, weight=1)
 
         is_anomaly = getattr(self.app, "inferred_task", "") == "anomaly"
@@ -1201,11 +1354,11 @@ class WorkspaceScreen:
         target_col = self.target_var.get() if not is_anomaly else ""
         self.feature_vars = {}
         non_target_cols = [c for c in self.app.df.columns if c != target_col]
-        initial_selection = (
-            set(self.app.selected_features)
-            if self.app.selected_features
-            else set(non_target_cols)
-        )
+
+        # ── RESTORE: gunakan selected_features dari app state jika ada ────────
+        saved_features = set(getattr(self.app, "selected_features", []) or [])
+        # Jika belum pernah dipilih, default semua kolom dipilih
+        initial_selection = saved_features if saved_features else set(non_target_cols)
 
         for i, col in enumerate(non_target_cols):
             var = ctk.BooleanVar(value=(col in initial_selection))
@@ -1261,6 +1414,10 @@ class WorkspaceScreen:
         self.model_vars = {}
         self.model_param_widgets = {}
         self.model_param_frames = {}
+
+        # ── RESTORE selected_models dari app state ────────────────────────────
+        saved_selected_models = set(getattr(self.app, "selected_models", []) or [])
+        saved_user_params = getattr(self.app, "user_model_params", {}) or {}
 
         scroll_frame = ctk.CTkScrollableFrame(parent)
         scroll_frame.pack(fill="both", expand=True)
@@ -1320,7 +1477,13 @@ class WorkspaceScreen:
                     )
                 )
 
-                var = ctk.BooleanVar(value=(model_name in self.app.selected_models))
+                # ── RESTORE: centang model yang sebelumnya dipilih ─────────────
+                was_selected = (
+                    model_name in saved_selected_models
+                    if saved_selected_models
+                    else False
+                )
+                var = ctk.BooleanVar(value=(was_selected and is_trainable_for_task))
                 self.model_vars[model_name] = var
 
                 model_card = ctk.CTkFrame(
@@ -1360,8 +1523,12 @@ class WorkspaceScreen:
                     if param_config.get("hidden", False):
                         continue
 
-                    current_value = self.app.user_model_params.get(model_name, {}).get(
-                        param_name, param_config["default"]
+                    # ── RESTORE param values dari app state ───────────────────
+                    current_value = saved_user_params.get(model_name, {}).get(
+                        param_name,
+                        self.app.user_model_params.get(model_name, {}).get(
+                            param_name, param_config["default"]
+                        ),
                     )
 
                     param_label = ctk.CTkLabel(
@@ -1438,7 +1605,7 @@ class WorkspaceScreen:
     def _build_step_split(self, parent):
         for i in range(10):
             parent.grid_rowconfigure(i, weight=0)
-        parent.grid_rowconfigure(5, weight=1)  # summary box expand sedikit
+        parent.grid_rowconfigure(5, weight=1)
         parent.grid_columnconfigure(0, weight=1)
 
         is_anomaly = getattr(self.app, "inferred_task", "") == "anomaly"
@@ -1575,6 +1742,7 @@ class WorkspaceScreen:
         if not getattr(self.app, "inferred_task", None):
             messagebox.showerror("Error", "Please configure training first.")
             return
+        self.app.cancel_training = False
         self.app.run_training()
         self._go_to_main_step(self.MAIN_STEP_TRAIN)
 
@@ -1585,11 +1753,16 @@ class WorkspaceScreen:
         self.clear_content()
 
         results = self.app.training_results
-        all_trained_models = self.app.all_trained_models
+
+        # ── PERBAIKAN UTAMA: all_trained_models tidak wajib ada di sini ───────
+        # Kita hanya butuh results (dari JSON) untuk display metrik.
+        # all_trained_models hanya dibutuhkan saat user mau konfirmasi model
+        # (untuk Try Model / Export). Itu di-handle di _confirm_model_selection.
+        all_trained_models = getattr(self.app, "all_trained_models", {})
 
         is_anomaly = getattr(self.app, "inferred_task", "") == "anomaly"
 
-        if not results or not all_trained_models:
+        if not results:
             ctk.CTkLabel(
                 self.main_area, text="❌ No results to display.", font=("Arial", 20)
             ).grid(row=0, column=0, pady=50)
@@ -1711,6 +1884,8 @@ class WorkspaceScreen:
         )
         self.selected_model_display_label.grid(row=0, column=0, pady=(0, 4))
 
+        # ── Tombol konfirmasi: hanya enable jika model sudah di-load ke memori ─
+        model_loaded_in_memory = bool(all_trained_models)
         self.select_model_btn = ctk.CTkButton(
             mid_frame,
             text="✅ Konfirmasi Model Terpilih",
@@ -1720,10 +1895,24 @@ class WorkspaceScreen:
             fg_color="#27ae60",
             hover_color="#219a52",
             command=self._confirm_model_selection,
-            state="disabled",
+            state="normal" if model_loaded_in_memory else "disabled",
         )
         self.select_model_btn.grid(row=1, column=0)
 
+        # ── Info jika model belum di-load ─────────────────────────────────────
+        if not model_loaded_in_memory:
+            ctk.CTkLabel(
+                mid_frame,
+                text="⚠️ Model sedang dimuat di background...",
+                font=ctk.CTkFont(family="Arial", size=11),
+                text_color="#f39c12",
+            ).grid(row=2, column=0, pady=(2, 0))
+
+        # ── "Next: Try Model" button — enable jika sudah ada selected_best_model ─
+        can_proceed = bool(
+            self.app.selected_best_model_name
+            and getattr(self.app, "selected_best_model", None)
+        )
         self.next_button_results = ctk.CTkButton(
             self.nav_area,
             text="Next: Try Model →",
@@ -1733,13 +1922,20 @@ class WorkspaceScreen:
             hover_color="#2980b9",
             font=ctk.CTkFont(family="Arial", size=15, weight="bold"),
             command=lambda: self._go_to_main_step(self.MAIN_STEP_TRY_MODEL),
-            state="disabled" if not self.app.selected_best_model_name else "normal",
+            state="normal" if can_proceed else "disabled",
         )
         self.next_button_results.grid(row=0, column=2, sticky="e", padx=(8, 0))
 
-        if self.app.selected_best_model_name:
+        # ── Auto-klik model yang sudah terpilih ──────────────────────────────
+        if (
+            self.app.selected_best_model_name
+            and self.app.selected_best_model_name in self.model_buttons
+        ):
             self._on_model_button_click(self.app.selected_best_model_name)
-            self.select_model_btn.configure(state="normal")
+            # Update label meski belum konfirmasi ulang
+            self.selected_model_display_label.configure(
+                text=f"Model Terpilih: {self.app.selected_best_model_name}"
+            )
 
     def _on_model_button_click(self, model_name):
         if (
@@ -1763,12 +1959,29 @@ class WorkspaceScreen:
                 hasattr(self, "select_model_btn")
                 and self.select_model_btn.winfo_exists()
             ):
-                self.select_model_btn.configure(state="normal")
+                # Enable konfirmasi hanya jika model sudah ada di memori
+                all_trained = getattr(self.app, "all_trained_models", {})
+                self.select_model_btn.configure(
+                    state="normal" if all_trained else "disabled"
+                )
 
             metrics = self.app.training_results.get(model_name, {})
             evaluation_detail = self.app.model_evaluation_details.get(model_name, {})
             summary = evaluation_detail.get("summary", {})
+
+            # Fallback ke outlier_summary
+            if not summary and hasattr(self.app, "outlier_summary"):
+                summary = self.app.outlier_summary.get(model_name, {})
+
+            # Fallback ke training_results langsung (untuk data yang sudah tersimpan di JSON)
+            if not summary and metrics:
+                summary = metrics
+
             scored_df = evaluation_detail.get("scored_dataset", pd.DataFrame())
+
+            # Coba ambil dari scored_datasets jika evaluation_detail tidak punya
+            if scored_df.empty and hasattr(self.app, "scored_datasets"):
+                scored_df = self.app.scored_datasets.get(model_name, pd.DataFrame())
 
             metrics_text = f"Model: {model_name}\n\n"
 
@@ -1776,23 +1989,26 @@ class WorkspaceScreen:
                 metrics_text += f"Error: {metrics['error']}\n"
             else:
                 if getattr(self.app, "inferred_task", "") == "anomaly":
+                    src = summary if summary else metrics
                     metrics_text += "========== MODEL RESULT SUMMARY ==========\n\n"
-                    metrics_text += f"Total Rows: {summary.get('total_rows', 0):,}\n"
-                    metrics_text += f"Total Outliers Detected: {summary.get('total_outliers_detected', 0):,}\n"
+                    metrics_text += f"Total Rows: {src.get('total_rows', 0):,}\n"
+                    metrics_text += f"Total Outliers Detected: {src.get('total_outliers_detected', 0):,}\n"
                     metrics_text += (
-                        f"Outlier Percentage: {summary.get('outlier_percentage', 0)}%\n"
+                        f"Outlier Percentage: {src.get('outlier_percentage', 0)}%\n"
                     )
-                    metrics_text += f"Lowest Outlier Score: {summary.get('lowest_outlier_score', 0):.4f}\n"
-                    metrics_text += f"Highest Outlier Score: {summary.get('highest_outlier_score', 0):.4f}\n"
-                    metrics_text += f"Average Outlier Score: {summary.get('average_outlier_score', 0):.4f}\n"
-                    metrics_text += f"Training Duration: {summary.get('training_duration', 0)} sec\n"
-                    metrics_text += f"Model Name: {summary.get('model_name', '-')}\n"
+                    metrics_text += f"Lowest Outlier Score: {src.get('lowest_outlier_score', 0):.4f}\n"
+                    metrics_text += f"Highest Outlier Score: {src.get('highest_outlier_score', 0):.4f}\n"
+                    metrics_text += f"Average Outlier Score: {src.get('average_outlier_score', 0):.4f}\n"
                     metrics_text += (
-                        f"Model Config:\n{summary.get('model_configuration', {})}\n"
+                        f"Training Duration: {src.get('training_duration', 0)} sec\n"
+                    )
+                    metrics_text += f"Model Name: {src.get('model_name', '-')}\n"
+                    metrics_text += (
+                        f"Model Config:\n{src.get('model_configuration', {})}\n"
                     )
 
                     metrics_text += "\n========== INSIGHT SUMMARY ==========\n\n"
-                    insights = summary.get("insights", [])
+                    insights = src.get("insights", [])
                     if insights:
                         for item in insights:
                             metrics_text += f"• {item}\n"
@@ -1800,7 +2016,7 @@ class WorkspaceScreen:
                         metrics_text += "• No major unusual pattern detected.\n"
 
                     metrics_text += "\n========== RECOMMENDATIONS ==========\n\n"
-                    recommendations = summary.get("recommendations", [])
+                    recommendations = src.get("recommendations", [])
                     if recommendations:
                         for item in recommendations:
                             metrics_text += f"• {item}\n"
@@ -1830,7 +2046,7 @@ class WorkspaceScreen:
                             index=False
                         )
                     else:
-                        metrics_text += "No scored dataset available.\n"
+                        metrics_text += "(Scored dataset dimuat di background, refresh halaman jika belum muncul)\n"
                 else:
                     for metric, value in metrics.items():
                         if isinstance(value, (int, float)):
@@ -1861,29 +2077,42 @@ class WorkspaceScreen:
 
     def _confirm_model_selection(self):
         if not self.selected_model_name_for_display:
-            return
-        self.app.selected_best_model_name = self.selected_model_name_for_display
-        model_pipeline = self.app.all_trained_models.get(
-            self.selected_model_name_for_display
-        )
-        if model_pipeline:
-            self.app.set_selected_best_model(
-                self.selected_model_name_for_display, model_pipeline
+            messagebox.showwarning(
+                "Pilih Model", "Klik model dari daftar terlebih dahulu."
             )
-        else:
+            return
+
+        all_trained = getattr(self.app, "all_trained_models", {})
+        if not all_trained:
+            messagebox.showwarning(
+                "Model Belum Siap",
+                "Model masih dimuat di background. Tunggu sebentar lalu coba lagi.",
+            )
+            return
+
+        model_pipeline = all_trained.get(self.selected_model_name_for_display)
+        if model_pipeline is None:
             messagebox.showerror(
                 "Error",
-                f"Model '{self.selected_model_name_for_display}' not found in trained models.",
+                f"Model '{self.selected_model_name_for_display}' tidak ditemukan di memori.\n"
+                "Pastikan model sudah selesai dimuat.",
             )
             return
+
+        self.app.set_selected_best_model(
+            self.selected_model_name_for_display, model_pipeline
+        )
+
         if (
             hasattr(self, "next_button_results")
             and self.next_button_results.winfo_exists()
         ):
             self.next_button_results.configure(state="normal")
+
         messagebox.showinfo(
             "Model Dikonfirmasi",
-            f"Model '{self.selected_model_name_for_display}' berhasil dipilih!\nAnda bisa lanjut ke Try Model.",
+            f"Model '{self.selected_model_name_for_display}' berhasil dipilih!\n"
+            "Anda bisa lanjut ke Try Model.",
         )
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -1898,7 +2127,7 @@ class WorkspaceScreen:
         self.main_area.grid_rowconfigure(0, weight=0)
         self.main_area.grid_rowconfigure(1, weight=0)
         self.main_area.grid_rowconfigure(2, weight=0)
-        self.main_area.grid_rowconfigure(3, weight=1)  # input frame expand
+        self.main_area.grid_rowconfigure(3, weight=1)
         self.main_area.grid_rowconfigure(4, weight=0)
         self.main_area.grid_rowconfigure(5, weight=0)
         self.main_area.grid_columnconfigure(0, weight=1)
@@ -2060,22 +2289,9 @@ class WorkspaceScreen:
     # ─────────────────────────────────────────────────────────────────────────
     #  DYNAMIC ANOMALY EXPLAINER
     # ─────────────────────────────────────────────────────────────────────────
-
-    def _generate_anomaly_explanation(
-        self,
-        input_df,
-        anomaly_score,
-        threshold,
-    ):
-
-        # =====================================================
-        # SCORE DISTRIBUTION
-        # =====================================================
-
+    def _generate_anomaly_explanation(self, input_df, anomaly_score, threshold):
         score_stats = getattr(self.app, "score_stats", None)
-
         if not score_stats:
-
             return {
                 "severity": "UNKNOWN",
                 "why_flagged": ["Score statistics unavailable"],
@@ -2085,146 +2301,59 @@ class WorkspaceScreen:
         p1 = score_stats["p1"]
         p3 = score_stats["p3"]
 
-        # =====================================================
-        # BASE SEVERITY FROM MODEL SCORE
-        # =====================================================
-
         if anomaly_score <= p0_1:
-
             severity = "CRITICAL"
-
         elif anomaly_score <= p1:
-
             severity = "HIGH"
-
         elif anomaly_score <= p3:
-
             severity = "MEDIUM"
-
         elif anomaly_score < threshold:
-
             severity = "LOW"
-
         else:
-
             severity = "NORMAL"
 
-        # =====================================================
-        # FEATURE ANALYSIS
-        # =====================================================
-
         reasons = []
-
         feature_stats = getattr(self.app, "feature_stats", None)
-
         if not feature_stats:
-
             return {
                 "severity": severity,
                 "why_flagged": ["Feature statistics unavailable"],
             }
 
         row = input_df.iloc[0]
-
         extreme_count = 0
         moderate_count = 0
 
         for feature, value in row.items():
-
-            # =================================================
-            # FEATURE EXISTS
-            # =================================================
-
             if feature not in feature_stats:
                 continue
-
-            # =================================================
-            # NUMERIC ONLY
-            # =================================================
-
-            if not isinstance(
-                value,
-                (
-                    int,
-                    float,
-                    np.integer,
-                    np.floating,
-                ),
-            ):
+            if not isinstance(value, (int, float, np.integer, np.floating)):
                 continue
-
             stats = feature_stats[feature]
-
             mean = stats["mean"]
             std = stats["std"]
-
-            # =================================================
-            # INVALID STD
-            # =================================================
-
             if std <= 0:
                 continue
-
-            # =================================================
-            # Z-SCORE
-            # =================================================
-
             zscore = abs((value - mean) / std)
-
-            # =================================================
-            # EXTREME ABNORMAL
-            # =================================================
-
             if zscore >= 3:
-
                 reasons.append(f"{feature} extremely abnormal")
                 extreme_count += 1
-
-            # =================================================
-            # MODERATE ABNORMAL
-            # =================================================
-
             elif zscore >= 2:
-
                 reasons.append(f"{feature} unusually deviated")
                 moderate_count += 1
 
-        # =====================================================
-        # BUSINESS SEVERITY OVERRIDE
-        # =====================================================
-
         if extreme_count >= 6:
-
             severity = "CRITICAL"
-
         elif extreme_count >= 4:
-
             severity = "HIGH"
-
         elif extreme_count >= 2 and severity == "LOW":
-
             severity = "MEDIUM"
 
-        # =====================================================
-        # FALLBACK
-        # =====================================================
-
         if not reasons:
-
             if anomaly_score < threshold:
-
                 reasons.append("General behavioral anomaly")
-
             else:
-
                 reasons.append("Behavior within normal range")
-
-        print("HYBRID SEVERITY ACTIVE")
-        print("EXTREME COUNT:", extreme_count)
-        print("FINAL SEVERITY:", severity)
-        # =====================================================
-        # FINAL OUTPUT
-        # =====================================================
 
         return {
             "severity": severity,
@@ -2289,15 +2418,11 @@ class WorkspaceScreen:
                     )[0]
 
                     explanation = self._generate_anomaly_explanation(
-                        input_df,
-                        anomaly_score,
-                        anomaly_threshold,
+                        input_df, anomaly_score, anomaly_threshold
                     )
 
                     if anomaly_score < anomaly_threshold:
-
                         color = "#E74C3C"
-
                         result_text = (
                             f"Result: Anomaly Detected 🚨\n\n"
                             f"Severity: {explanation['severity']}\n"
@@ -2305,11 +2430,8 @@ class WorkspaceScreen:
                             f"Why Flagged:\n"
                             f"- " + "\n- ".join(explanation["why_flagged"])
                         )
-
                     else:
-
                         color = "#2ECC71"
-
                         result_text = (
                             f"Result: Normal ✅\n\n"
                             f"Severity: {explanation['severity']}\n"
@@ -2317,11 +2439,6 @@ class WorkspaceScreen:
                             f"Status:\n"
                             f"- " + "\n- ".join(explanation["why_flagged"])
                         )
-
-                    self.prediction_label.configure(
-                        text=result_text,
-                        text_color=color,
-                    )
                     self.prediction_label.configure(text=result_text, text_color=color)
 
                 except ValueError:
