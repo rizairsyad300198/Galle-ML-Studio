@@ -1,0 +1,10 @@
+pandas
+numpy
+scikit-learn
+xgboost
+lightgbm
+customtkinter
+openpyxl
+joblib
+matplotlib
+pyod
