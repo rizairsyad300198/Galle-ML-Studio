@@ -1,5 +1,5 @@
 # ================================
-# app.py
+# app.py  (FIXED)
 # ================================
 
 import customtkinter as ctk
@@ -33,7 +33,25 @@ class GalleMLStudio(ctk.CTk):
         super().__init__()
 
         self.title("Galle ML Studio")
+
+        # Set geometry awal sebagai fallback
         self.geometry("1600x950")
+
+        # Maximize window setelah event loop siap
+        # (harus via after() agar bekerja di Windows — state("zoomed") di __init__ sering diabaikan)
+        def _maximize():
+            try:
+                self.state("zoomed")  # Windows: maximize dengan title bar
+            except Exception:
+                try:
+                    self.attributes("-zoomed", True)  # Linux (GNOME/XFCE/KDE)
+                except Exception:
+                    # Fallback manual: set ke ukuran layar penuh
+                    sw = self.winfo_screenwidth()
+                    sh = self.winfo_screenheight()
+                    self.geometry(f"{sw}x{sh}+0+0")
+
+        self.after(10, _maximize)
 
         # =====================================================
         # STATE
@@ -59,6 +77,8 @@ class GalleMLStudio(ctk.CTk):
 
         self.training_results = None
 
+        # all_trained_models: {model_name: pipeline_object}
+        # Diisi saat training ATAU saat load project dari artifact files
         self.all_trained_models = {}
 
         self.label_encoder = None
@@ -80,7 +100,7 @@ class GalleMLStudio(ctk.CTk):
         self.cancel_training = False
 
         # =====================================================
-        # NEW OUTLIER EVALUATION STATE
+        # OUTLIER EVALUATION STATE
         # =====================================================
 
         self.model_evaluation_details = {}
@@ -94,6 +114,11 @@ class GalleMLStudio(ctk.CTk):
         self.outlier_insights = {}
 
         self.outlier_recommendations = {}
+
+        # score_stats & feature_stats (untuk anomaly explainer di Try Model)
+        self.score_stats = {}
+
+        self.feature_stats = {}
 
         # =====================================================
         # SCREEN
@@ -155,28 +180,58 @@ class GalleMLStudio(ctk.CTk):
             return
 
         popup = ctk.CTkToplevel(self)
-
         popup.title("Open Project")
-
-        popup.geometry("400x500")
-
+        popup.resizable(False, False)
         popup.grab_set()
+        popup.transient(self)
+        popup.lift()
+
+        # Hitung tinggi dinamis berdasarkan jumlah project (min 300, max 600)
+        popup_w = 460
+        popup_h = min(600, max(300, 120 + len(projects) * 62))
+
+        # Center terhadap parent window
+        self.update_idletasks()
+        px = self.winfo_rootx()
+        py = self.winfo_rooty()
+        pw = self.winfo_width()
+        ph = self.winfo_height()
+        x = px + (pw // 2) - (popup_w // 2)
+        y = py + (ph // 2) - (popup_h // 2)
+        popup.geometry(f"{popup_w}x{popup_h}+{x}+{y}")
 
         ctk.CTkLabel(
             popup,
-            text="Select Project",
-            font=ctk.CTkFont(size=24, weight="bold"),
-        ).pack(pady=30)
+            text="📂  Open Project",
+            font=ctk.CTkFont(family="Arial", size=26, weight="bold"),
+        ).pack(pady=(30, 20))
+
+        scroll = ctk.CTkScrollableFrame(popup, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=20, pady=(0, 10))
 
         for project in projects:
-
             ctk.CTkButton(
-                popup,
+                scroll,
                 text=project,
-                width=300,
-                height=45,
+                width=380,
+                height=48,
+                font=ctk.CTkFont(family="Arial", size=15),
+                fg_color="#2b2d30",
+                hover_color="#3498db",
+                anchor="w",
                 command=lambda p=project: self._load_project(p, popup),
-            ).pack(pady=8)
+            ).pack(pady=5)
+
+        ctk.CTkButton(
+            popup,
+            text="Batal",
+            width=120,
+            height=36,
+            fg_color="#3d4045",
+            hover_color="#4a4d52",
+            font=ctk.CTkFont(family="Arial", size=14),
+            command=popup.destroy,
+        ).pack(pady=(0, 20))
 
     def _load_project(self, project_name, popup):
 
@@ -204,7 +259,7 @@ class GalleMLStudio(ctk.CTk):
 
         self.selected_features = state.get("selected_features", [])
 
-        self.train_test_split = state.get("train_test_split", "80/20")
+        self.train_test_split = state.get("train_test_split", "80/20 (Recommended)")
 
         self.inferred_task = state.get("inferred_task")
 
@@ -214,8 +269,10 @@ class GalleMLStudio(ctk.CTk):
 
         self.selected_best_model_path = state.get("selected_best_model_path")
 
+        self.user_model_params = state.get("user_model_params", {})
+
         # =====================================================
-        # NEW OUTLIER STATE
+        # OUTLIER STATE
         # =====================================================
 
         self.model_evaluation_details = state.get("model_evaluation_details", {})
@@ -228,20 +285,24 @@ class GalleMLStudio(ctk.CTk):
 
         self.outlier_recommendations = state.get("outlier_recommendations", {})
 
+        # Rebuild model_evaluation_details dari outlier_summary jika kosong
+        # (backward compat untuk project lama)
+        if not self.model_evaluation_details and self.outlier_summary:
+            for model_name, summary in self.outlier_summary.items():
+                self.model_evaluation_details[model_name] = {"summary": summary}
+
         # =====================================================
         # SHOW WORKSPACE DULU, BARU LOAD BERAT DI BACKGROUND
         # =====================================================
 
         self.show_workspace()
 
-        # Tampilkan loading overlay setelah workspace siap
         if self.workspace_screen:
 
             self.workspace_screen.show_loading_overlay("Memuat project...")
 
             self.update()
 
-        # Jalankan load berat di thread terpisah
         threading.Thread(
             target=self._load_project_heavy,
             args=(state,),
@@ -249,7 +310,7 @@ class GalleMLStudio(ctk.CTk):
         ).start()
 
     def _load_project_heavy(self, state):
-        """Load dataset & model di background thread, lalu hide overlay."""
+        """Load dataset & semua model di background thread, lalu hide overlay."""
 
         try:
 
@@ -275,9 +336,24 @@ class GalleMLStudio(ctk.CTk):
 
                             self.scored_datasets[model_name] = pd.read_csv(path)
 
+                            # Populate evaluation details dari scored dataset
+                            if (
+                                model_name not in self.model_evaluation_details
+                                or not self.model_evaluation_details.get(model_name, {})
+                            ):
+                                self.model_evaluation_details[model_name] = {
+                                    "scored_dataset": self.scored_datasets[model_name],
+                                    "summary": self.outlier_summary.get(model_name, {}),
+                                }
+                            else:
+                                # Inject scored_dataset ke evaluation details yang sudah ada
+                                self.model_evaluation_details[model_name][
+                                    "scored_dataset"
+                                ] = self.scored_datasets[model_name]
+
                         except Exception as e:
 
-                            print(f"Load scored dataset error: {e}")
+                            print(f"Load scored dataset error ({model_name}): {e}")
 
             # =====================================================
             # LOAD DATASET
@@ -285,52 +361,158 @@ class GalleMLStudio(ctk.CTk):
 
             if self.dataset_path and os.path.exists(self.dataset_path):
 
-                self.after(
-                    0,
-                    lambda: self.workspace_screen
-                    and self.workspace_screen.loading_message_label
-                    and self.workspace_screen.loading_message_label.configure(
-                        text="Membaca dataset..."
-                    ),
-                )
+                self._update_loading_msg("Membaca dataset...")
 
                 self.df = pd.read_csv(self.dataset_path)
 
             # =====================================================
-            # LOAD MODEL
+            # LOAD SELECTED BEST MODEL (dan semua model dari artifacts)
             # =====================================================
 
+            artifacts_dir = os.path.join("projects", self.current_project, "artifacts")
+
+            # --- Load selected best model ---
             if self.selected_best_model_path and os.path.exists(
                 self.selected_best_model_path
             ):
 
-                self.after(
-                    0,
-                    lambda: self.workspace_screen
-                    and self.workspace_screen.loading_message_label
-                    and self.workspace_screen.loading_message_label.configure(
-                        text="Memuat model..."
-                    ),
-                )
+                self._update_loading_msg("Memuat model terpilih...")
 
-                loaded = joblib.load(self.selected_best_model_path)
+                try:
 
-                self.selected_best_model = loaded["pipeline"]
+                    loaded = joblib.load(self.selected_best_model_path)
 
-                self.label_encoder = loaded.get("label_encoder")
+                    self.selected_best_model = loaded["pipeline"]
 
-                self.datetime_cols_for_prediction = loaded.get("datetime_cols", [])
+                    self.label_encoder = loaded.get("label_encoder")
 
-                self.feature_column_types = loaded.get("feature_column_types", {})
+                    self.datetime_cols_for_prediction = loaded.get("datetime_cols", [])
+
+                    self.feature_column_types = loaded.get("feature_column_types", {})
+
+                    # Daftarkan ke all_trained_models
+                    if self.selected_best_model_name:
+
+                        self.all_trained_models[self.selected_best_model_name] = (
+                            self.selected_best_model
+                        )
+
+                except Exception as e:
+
+                    print(f"Load selected model error: {e}")
+
+            # --- Load semua model lain dari artifacts folder ---
+            if os.path.exists(artifacts_dir):
+
+                for file in os.listdir(artifacts_dir):
+
+                    if file.endswith("_selected_model.joblib"):
+
+                        # Derive model name dari filename
+                        model_name = file.replace("_selected_model.joblib", "")
+
+                        if model_name in self.all_trained_models:
+                            continue  # sudah di-load
+
+                        self._update_loading_msg(f"Memuat model: {model_name}...")
+
+                        try:
+
+                            path = os.path.join(artifacts_dir, file)
+
+                            loaded = joblib.load(path)
+
+                            pipeline = loaded.get("pipeline")
+
+                            if pipeline is not None:
+
+                                self.all_trained_models[model_name] = pipeline
+
+                                # Jika label_encoder belum ada, ambil dari sini
+                                if self.label_encoder is None:
+                                    self.label_encoder = loaded.get("label_encoder")
+
+                                if not self.datetime_cols_for_prediction:
+                                    self.datetime_cols_for_prediction = loaded.get(
+                                        "datetime_cols", []
+                                    )
+
+                                if not self.feature_column_types:
+                                    self.feature_column_types = loaded.get(
+                                        "feature_column_types", {}
+                                    )
+
+                        except Exception as e:
+
+                            print(f"Load artifact model error ({model_name}): {e}")
+
+            # --- Pastikan semua model di training_results ada di all_trained_models
+            #     Coba berbagai variasi nama file untuk kompatibilitas
+            if self.training_results and os.path.exists(artifacts_dir):
+                for model_name in self.training_results.keys():
+                    if model_name in self.all_trained_models:
+                        continue
+
+                    # Daftar kandidat nama file yang mungkin (spasi asli, underscore, dll)
+                    candidates = [
+                        os.path.join(
+                            artifacts_dir, f"{model_name}_selected_model.joblib"
+                        ),
+                        os.path.join(
+                            artifacts_dir,
+                            f"{model_name.replace(' ', '_')}_selected_model.joblib",
+                        ),
+                        os.path.join(
+                            artifacts_dir,
+                            f"{model_name.lower().replace(' ', '_')}_selected_model.joblib",
+                        ),
+                    ]
+                    for candidate in candidates:
+                        if os.path.exists(candidate):
+                            try:
+                                loaded = joblib.load(candidate)
+                                p = loaded.get("pipeline")
+                                if p:
+                                    self.all_trained_models[model_name] = p
+                                    self._update_loading_msg(
+                                        f"Memuat model: {model_name}..."
+                                    )
+                                    if self.label_encoder is None:
+                                        self.label_encoder = loaded.get("label_encoder")
+                                    if not self.datetime_cols_for_prediction:
+                                        self.datetime_cols_for_prediction = loaded.get(
+                                            "datetime_cols", []
+                                        )
+                                    if not self.feature_column_types:
+                                        self.feature_column_types = loaded.get(
+                                            "feature_column_types", {}
+                                        )
+                                    break
+                            except Exception as e:
+                                print(
+                                    f"Load fallback model error ({model_name}, {candidate}): {e}"
+                                )
 
         except Exception as e:
 
-            print(f"Load project error: {e}")
+            print(f"Load project heavy error: {e}")
 
         finally:
 
-            # Setelah semua selesai, hide overlay dan navigate ke fase yang benar
             self.after(0, self._finish_load_project)
+
+    def _update_loading_msg(self, msg: str):
+        """Thread-safe update loading message."""
+        self.after(
+            0,
+            lambda: (
+                self.workspace_screen
+                and hasattr(self.workspace_screen, "loading_message_label")
+                and self.workspace_screen.loading_message_label
+                and self.workspace_screen.loading_message_label.winfo_exists()
+                and self.workspace_screen.loading_message_label.configure(text=msg)
+            ),
+        )
 
     def _finish_load_project(self):
         """Dipanggil di main thread setelah load selesai."""
@@ -338,10 +520,6 @@ class GalleMLStudio(ctk.CTk):
         if self.workspace_screen:
 
             self.workspace_screen.hide_loading_overlay()
-
-        last_phase = self.project_manager.load_state(self.current_project).get(
-            "last_phase", "upload"
-        )
 
         if not self.workspace_screen:
             return
@@ -355,17 +533,15 @@ class GalleMLStudio(ctk.CTk):
             ws.sidebar_steps["try_model"].configure(state="normal")
             ws.sidebar_steps["export_model"].configure(state="normal")
 
-            # Selalu navigate ke results jika training sudah ada
             ws._go_to_main_step(ws.MAIN_STEP_RESULTS)
 
         elif self.df is not None and self.inferred_task:
 
-            # Training belum selesai/dibatalkan, kembali ke configure
             ws._go_to_main_step(ws.MAIN_STEP_CONFIGURE)
 
         elif self.df is not None:
 
-            ws._go_to_main_step(ws.MAIN_STEP_UPLOAD)  # show dataset preview
+            ws._go_to_main_step(ws.MAIN_STEP_UPLOAD)
 
         else:
 
@@ -449,7 +625,6 @@ class GalleMLStudio(ctk.CTk):
                 test_size=1 - split_ratio,
             )
 
-            # Cek cancel sebelum mulai
             if self.cancel_training:
                 return
 
@@ -458,7 +633,6 @@ class GalleMLStudio(ctk.CTk):
                 self.all_trained_models,
             ) = trainer.train(self.selected_models)
 
-            # Cek cancel setelah training
             if self.cancel_training:
                 self.training_results = None
                 self.all_trained_models = {}
@@ -469,7 +643,7 @@ class GalleMLStudio(ctk.CTk):
             self.feature_stats = trainer.feature_stats
 
             # =================================================
-            # SAVE NEW EVALUATION DATA
+            # SAVE EVALUATION DATA
             # =================================================
 
             self.model_evaluation_details = trainer.model_evaluation_details
@@ -526,8 +700,11 @@ class GalleMLStudio(ctk.CTk):
                 )
 
             # =================================================
-            # AUTO SELECT BEST MODEL
+            # AUTO SELECT BEST MODEL  &  SAVE ALL MODELS
             # =================================================
+
+            for model_name, pipeline in self.all_trained_models.items():
+                self._save_model_artifact(model_name, pipeline)
 
             if (
                 trainer.best_model_name
@@ -579,17 +756,10 @@ class GalleMLStudio(ctk.CTk):
     # MODEL
     # =========================================================
 
-    def set_selected_best_model(self, model_name, model_pipeline):
+    def _save_model_artifact(self, model_name: str, pipeline):
+        """Simpan satu model ke artifacts folder."""
 
-        self.selected_best_model_name = model_name
-
-        self.selected_best_model = model_pipeline
-
-        artifacts_dir = os.path.join(
-            "projects",
-            self.current_project,
-            "artifacts",
-        )
+        artifacts_dir = os.path.join("projects", self.current_project, "artifacts")
 
         os.makedirs(artifacts_dir, exist_ok=True)
 
@@ -602,7 +772,7 @@ class GalleMLStudio(ctk.CTk):
 
             joblib.dump(
                 {
-                    "pipeline": self.selected_best_model,
+                    "pipeline": pipeline,
                     "label_encoder": self.label_encoder,
                     "datetime_cols": self.datetime_cols_for_prediction,
                     "feature_column_types": self.feature_column_types,
@@ -611,11 +781,31 @@ class GalleMLStudio(ctk.CTk):
                 model_path,
             )
 
-            self.selected_best_model_path = model_path
+            return model_path
 
         except Exception as e:
 
-            messagebox.showerror("Save Model Error", str(e))
+            print(f"Save model artifact error ({model_name}): {e}")
+
+            return None
+
+    def set_selected_best_model(self, model_name, model_pipeline):
+
+        self.selected_best_model_name = model_name
+
+        self.selected_best_model = model_pipeline
+
+        model_path = self._save_model_artifact(model_name, model_pipeline)
+
+        if model_path:
+
+            self.selected_best_model_path = model_path
+
+        else:
+
+            messagebox.showerror(
+                "Save Model Error", f"Gagal menyimpan model '{model_name}'."
+            )
 
     # =========================================================
     # RESULTS
@@ -708,9 +898,20 @@ class GalleMLStudio(ctk.CTk):
             "selected_best_model_name": self.selected_best_model_name,
             "selected_best_model_path": self.selected_best_model_path,
             "training_durations": self.training_durations,
+            # model_evaluation_details: hanya simpan bagian yang JSON-serializable
+            # (scored_dataset adalah DataFrame, tidak bisa di-JSON)
+            "model_evaluation_details": {
+                k: {
+                    ik: iv
+                    for ik, iv in v.items()
+                    if ik != "scored_dataset"  # skip DataFrame
+                }
+                for k, v in self.model_evaluation_details.items()
+            },
             "outlier_summary": self.outlier_summary,
             "outlier_insights": self.outlier_insights,
             "outlier_recommendations": self.outlier_recommendations,
+            "user_model_params": self.user_model_params,
         }
 
     def _save_current_state(self, last_phase):
