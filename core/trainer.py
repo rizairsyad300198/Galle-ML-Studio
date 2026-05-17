@@ -126,7 +126,285 @@ ALL_MODELS_CONFIG = {
             },
         },
     },
+    "Logistic Regression": {
+        "class": LogisticRegression,
+        "params": {
+            "C": {
+                "type": "float",
+                "default": 1.0,
+                "min": 0.001,
+                "max": 1000.0,
+            },
+            "max_iter": {
+                "type": "int",
+                "default": 200,
+                "min": 50,
+                "max": 2000,
+            },
+            "solver": {
+                "type": "str",
+                "default": "lbfgs",
+                "options": ["lbfgs", "liblinear", "saga"],
+            },
+        },
+    },
+    "Random Forest Classifier": {
+        "class": RandomForestClassifier,
+        "params": {
+            "n_estimators": {
+                "type": "int",
+                "default": 100,
+                "min": 10,
+                "max": 1000,
+            },
+            "max_depth": {
+                "type": "int",
+                "default": 10,
+                "min": 1,
+                "max": 100,
+                "none_option": True,
+            },
+            "random_state": {
+                "type": "int",
+                "default": 42,
+                "hidden": True,
+            },
+        },
+    },
+    "XGBoost Classifier": {
+        "class": XGBClassifier,
+        "params": {
+            "n_estimators": {
+                "type": "int",
+                "default": 100,
+                "min": 10,
+                "max": 1000,
+            },
+            "learning_rate": {
+                "type": "float",
+                "default": 0.1,
+                "min": 0.001,
+                "max": 1.0,
+            },
+            "max_depth": {
+                "type": "int",
+                "default": 6,
+                "min": 1,
+                "max": 20,
+            },
+            "random_state": {
+                "type": "int",
+                "default": 42,
+                "hidden": True,
+            },
+        },
+    },
+    "Linear Regression": {
+        "class": LinearRegression,
+        "params": {},
+    },
+    "Random Forest Regressor": {
+        "class": RandomForestRegressor,
+        "params": {
+            "n_estimators": {
+                "type": "int",
+                "default": 100,
+                "min": 10,
+                "max": 1000,
+            },
+            "max_depth": {
+                "type": "int",
+                "default": 10,
+                "min": 1,
+                "max": 100,
+                "none_option": True,
+            },
+            "random_state": {
+                "type": "int",
+                "default": 42,
+                "hidden": True,
+            },
+        },
+    },
+    "XGBoost Regressor": {
+        "class": XGBRegressor,
+        "params": {
+            "n_estimators": {
+                "type": "int",
+                "default": 100,
+                "min": 10,
+                "max": 1000,
+            },
+            "learning_rate": {
+                "type": "float",
+                "default": 0.1,
+                "min": 0.001,
+                "max": 1.0,
+            },
+            "max_depth": {
+                "type": "int",
+                "default": 6,
+                "min": 1,
+                "max": 20,
+            },
+            "random_state": {
+                "type": "int",
+                "default": 42,
+                "hidden": True,
+            },
+        },
+    },
 }
+
+
+# =========================================================
+# FEATURE VALIDATION
+# =========================================================
+
+
+def validate_features_for_task(df: pd.DataFrame, features: list, task_type: str):
+    """
+    Validasi apakah feature yang dipilih sesuai dengan task type.
+
+    Returns:
+        (is_valid: bool, errors: list[str], warnings: list[str])
+    """
+    errors = []
+    warnings = []
+
+    if not features:
+        errors.append("Tidak ada feature yang dipilih.")
+        return False, errors, warnings
+
+    missing_cols = [f for f in features if f not in df.columns]
+    if missing_cols:
+        errors.append(f"Kolom tidak ditemukan di dataset: {', '.join(missing_cols)}")
+        return False, errors, warnings
+
+    for col in features:
+        series = df[col]
+        is_numeric = pd.api.types.is_numeric_dtype(series)
+        n_unique = series.nunique()
+        null_pct = series.isna().mean() * 100
+
+        # ── NULL check ──────────────────────────────────────────────────────
+        if null_pct > 80:
+            warnings.append(
+                f"Kolom '{col}' memiliki {null_pct:.0f}% nilai kosong — "
+                f"mungkin tidak informatif."
+            )
+
+        # ── Constant column check ────────────────────────────────────────────
+        if n_unique <= 1:
+            warnings.append(
+                f"Kolom '{col}' hanya memiliki {n_unique} nilai unik — "
+                f"tidak akan membantu model."
+            )
+
+        # ── Regression: butuh setidaknya beberapa fitur numerik ─────────────
+        if task_type == "regression":
+            if not is_numeric:
+                warnings.append(
+                    f"Kolom '{col}' bukan numerik. "
+                    f"Untuk Regresi, disarankan menggunakan fitur numerik. "
+                    f"Kolom kategorik akan di-encode otomatis, tapi perhatikan kardinalitasnya."
+                )
+
+        # ── High cardinality categorical warning ─────────────────────────────
+        if not is_numeric and n_unique > 50:
+            warnings.append(
+                f"Kolom '{col}' memiliki {n_unique} nilai unik (kategorik tinggi). "
+                f"One-hot encoding akan menghasilkan banyak kolom — "
+                f"pertimbangkan untuk drop atau encode manual."
+            )
+
+    # ── Regression: pastikan ada minimal 1 fitur numerik ────────────────────
+    if task_type == "regression":
+        numeric_features = [f for f in features if pd.api.types.is_numeric_dtype(df[f])]
+        if len(numeric_features) == 0:
+            errors.append(
+                "Regresi membutuhkan minimal 1 fitur numerik. "
+                "Semua fitur yang dipilih bukan numerik."
+            )
+
+    # ── Anomaly: semua fitur harus numerik ──────────────────────────────────
+    # (model anomaly detection seperti IsolationForest, LOF, dll tidak bisa
+    #  terima raw kategorik — preprocessor akan handle, tapi berikan warning)
+    if task_type == "anomaly":
+        non_numeric = [f for f in features if not pd.api.types.is_numeric_dtype(df[f])]
+        if non_numeric:
+            warnings.append(
+                f"Fitur berikut bukan numerik: {', '.join(non_numeric)}. "
+                f"Untuk Anomaly Detection, disarankan hanya pakai fitur numerik. "
+                f"Kolom kategorik akan di-encode otomatis via OneHotEncoder."
+            )
+        numeric_features = [f for f in features if pd.api.types.is_numeric_dtype(df[f])]
+        if len(numeric_features) == 0:
+            errors.append(
+                "Anomaly Detection membutuhkan minimal 1 fitur numerik. "
+                "Semua fitur yang dipilih bukan numerik."
+            )
+
+    is_valid = len(errors) == 0
+    return is_valid, errors, warnings
+
+
+def validate_target_for_task(df: pd.DataFrame, target_col: str, task_type: str):
+    """
+    Validasi apakah target column sesuai dengan task type.
+
+    Returns:
+        (is_valid: bool, errors: list[str], warnings: list[str])
+    """
+    errors = []
+    warnings = []
+
+    if task_type == "anomaly":
+        # Anomaly tidak butuh target
+        return True, errors, warnings
+
+    if not target_col or target_col not in df.columns:
+        errors.append(f"Kolom target '{target_col}' tidak ditemukan di dataset.")
+        return False, errors, warnings
+
+    series = df[target_col]
+    is_numeric = pd.api.types.is_numeric_dtype(series)
+    n_unique = series.nunique()
+    null_pct = series.isna().mean() * 100
+
+    if null_pct > 20:
+        warnings.append(
+            f"Target '{target_col}' memiliki {null_pct:.0f}% nilai kosong — "
+            f"pertimbangkan untuk cleaning data terlebih dahulu."
+        )
+
+    if task_type == "regression":
+        if not is_numeric:
+            errors.append(
+                f"Target '{target_col}' bukan numerik, tapi task type adalah Regresi. "
+                f"Regresi hanya bisa memprediksi nilai angka (contoh: harga, suhu, pendapatan). "
+                f"Ganti task ke Klasifikasi, atau pilih kolom target yang berisi angka."
+            )
+        elif n_unique < 5:
+            warnings.append(
+                f"Target '{target_col}' hanya memiliki {n_unique} nilai unik. "
+                f"Mungkin lebih cocok untuk Klasifikasi daripada Regresi."
+            )
+
+    if task_type == "classification":
+        if is_numeric and n_unique > 50:
+            warnings.append(
+                f"Target '{target_col}' memiliki {n_unique} nilai unik numerik. "
+                f"Mungkin lebih cocok untuk Regresi daripada Klasifikasi."
+            )
+        if n_unique < 2:
+            errors.append(
+                f"Target '{target_col}' hanya memiliki {n_unique} kelas unik. "
+                f"Klasifikasi membutuhkan minimal 2 kelas."
+            )
+
+    is_valid = len(errors) == 0
+    return is_valid, errors, warnings
 
 
 # =========================================================
@@ -265,6 +543,11 @@ class MLTrainer:
         self.scored_datasets = {}
 
         self.training_durations = {}
+
+        # ── FIX: selalu inisialisasi score_stats & feature_stats ──────────────
+        # Supaya tidak error "has no attribute score_stats" saat task bukan anomaly
+        self.score_stats = {}
+        self.feature_stats = {}
 
     # =====================================================
     # PREPROCESSOR
@@ -458,18 +741,217 @@ class MLTrainer:
         return recs
 
     # =====================================================
-    # TRAIN
+    # TRAIN — ENTRY POINT
     # =====================================================
 
     def train(self, selected_models):
+        """
+        Entry point training. Dispatch ke method yang sesuai task_type.
+        Validasi feature & target dilakukan di sini sebelum training dimulai.
+        """
+        # ── Validasi target ──────────────────────────────────────────────────
+        is_valid_target, target_errors, target_warnings = validate_target_for_task(
+            self.df, self.target_column, self.task_type
+        )
+        if not is_valid_target:
+            raise ValueError(
+                "❌ Target column tidak valid:\n\n" + "\n".join(target_errors)
+            )
+
+        # ── Validasi features ────────────────────────────────────────────────
+        is_valid_feat, feat_errors, feat_warnings = validate_features_for_task(
+            self.df, self.selected_features, self.task_type
+        )
+        if not is_valid_feat:
+            raise ValueError(
+                "❌ Feature selection tidak valid:\n\n" + "\n".join(feat_errors)
+            )
+
+        # Log warnings (tidak stop training)
+        for w in target_warnings + feat_warnings:
+            print(f"[WARNING] {w}")
 
         X = self.df[self.selected_features]
 
         self._build_preprocessor(X)
 
-        self._train_anomaly(X, selected_models)
+        if self.task_type == "anomaly":
+            self._train_anomaly(X, selected_models)
+        elif self.task_type == "classification":
+            self._train_classification(X, selected_models)
+        elif self.task_type == "regression":
+            self._train_regression(X, selected_models)
+        else:
+            raise ValueError(f"Task type tidak dikenal: '{self.task_type}'")
 
         return (self.results, self.all_trained_models)
+
+    # =====================================================
+    # CLASSIFICATION TRAINING
+    # =====================================================
+
+    def _train_classification(self, X, selected_models):
+        print("========== CLASSIFICATION TRAINING ==========")
+
+        y = self.df[self.target_column]
+
+        # Label encode target jika kategorik
+        if not pd.api.types.is_numeric_dtype(y):
+            self.label_encoder = LabelEncoder()
+            y = self.label_encoder.fit_transform(y)
+        else:
+            y = y.values
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            X,
+            y,
+            test_size=self.test_size,
+            random_state=42,
+            stratify=y if len(np.unique(y)) > 1 else None,
+        )
+
+        classification_models = get_available_models("classification")
+
+        for model_name in selected_models:
+            if model_name not in classification_models:
+                print(f"SKIP (bukan classification model): {model_name}")
+                continue
+
+            try:
+                config = ALL_MODELS_CONFIG[model_name]
+                model_class = config["class"]
+                default_params = {k: v["default"] for k, v in config["params"].items()}
+                actual_params = {
+                    **default_params,
+                    **self.user_model_params.get(model_name, {}),
+                }
+
+                model = model_class(**actual_params)
+
+                pipeline = Pipeline(
+                    [
+                        ("preprocessor", self.preprocessor),
+                        ("classifier", model),
+                    ]
+                )
+
+                start_time = time.time()
+                pipeline.fit(X_train, y_train)
+                duration = round(time.time() - start_time, 2)
+
+                y_pred = pipeline.predict(X_test)
+
+                acc = accuracy_score(y_test, y_pred)
+                prec = precision_score(
+                    y_test, y_pred, average="weighted", zero_division=0
+                )
+                rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)
+                f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)
+
+                summary = {
+                    "model_name": model_name,
+                    "accuracy": round(acc, 4),
+                    "precision": round(prec, 4),
+                    "recall": round(rec, 4),
+                    "f1_score": round(f1, 4),
+                    "training_duration": duration,
+                    "model_configuration": actual_params,
+                    "total_rows": len(X),
+                    "test_rows": len(X_test),
+                }
+
+                self.results[model_name] = summary
+                self.all_trained_models[model_name] = pipeline
+                self.training_durations[model_name] = duration
+                self.model_evaluation_details[model_name] = {"summary": summary}
+
+                print(f"SUCCESS: {model_name} | Accuracy: {acc:.4f}")
+
+            except Exception as e:
+                print(f"ERROR TRAINING {model_name}: {e}")
+                self.results[model_name] = {"error": str(e)}
+
+        self._select_best_model_supervised("f1_score")
+
+    # =====================================================
+    # REGRESSION TRAINING
+    # =====================================================
+
+    def _train_regression(self, X, selected_models):
+        print("========== REGRESSION TRAINING ==========")
+
+        y = self.df[self.target_column]
+
+        # ── Validasi eksplisit: target harus numerik untuk regression ─────────
+        if not pd.api.types.is_numeric_dtype(y):
+            raise ValueError(
+                f"❌ Target '{self.target_column}' bukan numerik.\n"
+                f"Regresi hanya bisa memprediksi nilai angka.\n"
+                f"Ganti task ke Klasifikasi, atau pilih target yang berisi angka."
+            )
+
+        y = y.values
+
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=self.test_size, random_state=42
+        )
+
+        regression_models = get_available_models("regression")
+
+        for model_name in selected_models:
+            if model_name not in regression_models:
+                print(f"SKIP (bukan regression model): {model_name}")
+                continue
+
+            try:
+                config = ALL_MODELS_CONFIG[model_name]
+                model_class = config["class"]
+                default_params = {k: v["default"] for k, v in config["params"].items()}
+                actual_params = {
+                    **default_params,
+                    **self.user_model_params.get(model_name, {}),
+                }
+
+                model = model_class(**actual_params)
+
+                pipeline = Pipeline(
+                    [
+                        ("preprocessor", self.preprocessor),
+                        ("classifier", model),
+                    ]
+                )
+
+                start_time = time.time()
+                pipeline.fit(X_train, y_train)
+                duration = round(time.time() - start_time, 2)
+
+                y_pred = pipeline.predict(X_test)
+
+                rmse = float(np.sqrt(mean_squared_error(y_test, y_pred)))
+                r2 = float(r2_score(y_test, y_pred))
+
+                summary = {
+                    "model_name": model_name,
+                    "rmse": round(rmse, 4),
+                    "r2_score": round(r2, 4),
+                    "training_duration": duration,
+                    "model_configuration": actual_params,
+                    "total_rows": len(X),
+                    "test_rows": len(X_test),
+                }
+
+                self.results[model_name] = summary
+                self.all_trained_models[model_name] = pipeline
+                self.training_durations[model_name] = duration
+                self.model_evaluation_details[model_name] = {"summary": summary}
+
+                print(f"SUCCESS: {model_name} | RMSE: {rmse:.4f} | R2: {r2:.4f}")
+
+            except Exception as e:
+                print(f"ERROR TRAINING {model_name}: {e}")
+                self.results[model_name] = {"error": str(e)}
+
+        self._select_best_model_supervised("r2_score", higher_is_better=True)
 
     # =====================================================
     # ANOMALY TRAINING
@@ -534,12 +1016,15 @@ class MLTrainer:
 
                 scores = self._get_outlier_scores(pipeline, X)
 
-                self.score_stats = {
-                    "p0_1": float(np.percentile(scores, 0.1)),
-                    "p1": float(np.percentile(scores, 1)),
-                    "p3": float(np.percentile(scores, 3)),
-                    "mean": float(np.mean(scores)),
-                }
+                if scores is not None and len(scores) > 0:
+                    self.score_stats = {
+                        "p0_1": float(np.percentile(scores, 0.1)),
+                        "p1": float(np.percentile(scores, 1)),
+                        "p3": float(np.percentile(scores, 3)),
+                        "mean": float(np.mean(scores)),
+                    }
+                else:
+                    self.score_stats = {}
 
                 results_df = X.copy()
 
@@ -713,7 +1198,7 @@ class MLTrainer:
         self._select_best_model()
 
     # =====================================================
-    # BEST MODEL
+    # BEST MODEL — ANOMALY
     # =====================================================
 
     def _select_best_model(self):
@@ -737,6 +1222,30 @@ class MLTrainer:
         self.best_model_name = best_model
 
         print(f"BEST MODEL: " f"{self.best_model_name}")
+
+    # =====================================================
+    # BEST MODEL — SUPERVISED (classification & regression)
+    # =====================================================
+
+    def _select_best_model_supervised(
+        self, metric_key: str, higher_is_better: bool = True
+    ):
+        best_model = None
+        best_score = -np.inf if higher_is_better else np.inf
+
+        for model_name, metrics in self.results.items():
+            if "error" in metrics:
+                continue
+            score = metrics.get(metric_key, -np.inf if higher_is_better else np.inf)
+            if higher_is_better and score > best_score:
+                best_score = score
+                best_model = model_name
+            elif not higher_is_better and score < best_score:
+                best_score = score
+                best_model = model_name
+
+        self.best_model_name = best_model
+        print(f"BEST MODEL: {self.best_model_name} ({metric_key}: {best_score})")
 
     # =====================================================
     # SAVE
@@ -783,12 +1292,25 @@ class MLTrainer:
 def get_available_models(task_type):
 
     if task_type == "anomaly":
-
         return [
             "Isolation Forest",
             "Local Outlier Factor",
             "One-Class SVM",
             "HBOS",
+        ]
+
+    if task_type == "classification":
+        return [
+            "Logistic Regression",
+            "Random Forest Classifier",
+            "XGBoost Classifier",
+        ]
+
+    if task_type == "regression":
+        return [
+            "Linear Regression",
+            "Random Forest Regressor",
+            "XGBoost Regressor",
         ]
 
     return []

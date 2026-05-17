@@ -17,10 +17,7 @@ from core.trainer import (
     get_column_types,
 )
 
-from ui.screens import (
-    StartScreen,
-    WorkspaceScreen,
-)
+from ui.main import StartScreen, WorkspaceScreen
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -638,9 +635,8 @@ class GalleMLStudio(ctk.CTk):
                 self.all_trained_models = {}
                 return
 
-            self.score_stats = trainer.score_stats
-
-            self.feature_stats = trainer.feature_stats
+            self.score_stats = getattr(trainer, "score_stats", {})
+            self.feature_stats = getattr(trainer, "feature_stats", {})
 
             # =================================================
             # SAVE EVALUATION DATA
