@@ -157,7 +157,7 @@ class WorkspaceScreen:
             logo_img = ctk.CTkImage(
                 light_image=Image.open(logo_path),
                 dark_image=Image.open(logo_path),
-                size=(160, 58),
+                size=(160, 130),
             )
             ctk.CTkLabel(
                 sidebar,

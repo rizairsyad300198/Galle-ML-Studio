@@ -1,6 +1,15 @@
 # ================================
 # app.py  (FIXED)
 # ================================
+import ctypes
+
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
 
 import customtkinter as ctk
 import pandas as pd
@@ -30,14 +39,13 @@ class GalleMLStudio(ctk.CTk):
     def __init__(self):
 
         super().__init__()
-        self._setup_window_icon()
         self.title("Galle ML Studio")
 
         # Set geometry awal sebagai fallback
         self.geometry("1600x950")
 
         # Maximize window setelah event loop siap
-        # (harus via after() agar bekerja di Windows — state("zoomed") di __init__ sering diabaikan)
+        self._apply_icon()
         self._show_splash()
 
         def _maximize():
@@ -131,28 +139,84 @@ class GalleMLStudio(ctk.CTk):
         self.show_start_screen()
 
     def _setup_window_icon(self):
-        """Set icon di taskbar dan title bar."""
+        """Set icon di taskbar dan title bar — khusus dipanggil setelah deiconify."""
         try:
-            icon_path = os.path.join("assets", "logo.ico")
-            if os.path.exists(icon_path):
-                # ← via after() supaya tidak di-override CTk
-                self.after(0, lambda: self.iconbitmap(icon_path))
-            else:
-                png_path = os.path.join("assets", "logo.png")
-                if os.path.exists(png_path):
-                    from PIL import ImageTk
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            icon_path = os.path.join(base_dir, "assets", "logo.ico")
 
-                    img = ImageTk.PhotoImage(file=png_path)
-                    self.after(0, lambda: self.iconphoto(True, img))
-                    self._icon_ref = img
+            if os.path.exists(icon_path):
+                # Panggil langsung (bukan via after) karena sudah di main thread
+                self.iconbitmap(icon_path)
+            else:
+                print(f"[icon] logo.ico tidak ditemukan: {icon_path}")
+
         except Exception as e:
-            print(f"[icon] {e}")
+            print(f"[icon] error: {e}")
+
+    def _apply_icon(self):
+        try:
+            import ctypes
+
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            icon_path = os.path.join(base_dir, "assets", "logo.ico")
+
+            if not os.path.exists(icon_path):
+                print(f"[icon] tidak ditemukan: {icon_path}")
+                return
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                "GalleMLStudio.App.1.0"
+            )
+
+            IMAGE_ICON = 1
+            LR_LOADFROMFILE = 0x00000010
+
+            # Load ukuran BESAR untuk taskbar (256x256)
+            hicon_big = ctypes.windll.user32.LoadImageW(
+                None,
+                icon_path,
+                IMAGE_ICON,
+                256,
+                256,  # eksplisit 256x256
+                LR_LOADFROMFILE,
+            )
+
+            # Load ukuran kecil untuk title bar (32x32)
+            hicon_small = ctypes.windll.user32.LoadImageW(
+                None,
+                icon_path,
+                IMAGE_ICON,
+                32,
+                32,
+                LR_LOADFROMFILE,
+            )
+
+            if hicon_big or hicon_small:
+                hwnd = self.winfo_id()
+                WM_SETICON = 0x0080
+                ICON_SMALL = 0
+                ICON_BIG = 1
+
+                if hicon_big:
+                    ctypes.windll.user32.SendMessageW(
+                        hwnd, WM_SETICON, ICON_BIG, hicon_big
+                    )
+                if hicon_small:
+                    ctypes.windll.user32.SendMessageW(
+                        hwnd, WM_SETICON, ICON_SMALL, hicon_small
+                    )
+
+            self.iconbitmap(default=icon_path)
+            self.wm_iconbitmap(icon_path)
+
+        except Exception as e:
+            print(f"[icon] error: {e}")
 
     def _show_splash(self):
         """Tampilkan splash screen selama 2.5 detik, lalu lanjut ke app."""
 
         splash = ctk.CTkToplevel(self)
-        splash.overrideredirect(True)  # hapus title bar
+        splash.overrideredirect(True)
         splash.attributes("-topmost", True)
 
         # ── Ukuran & posisi splash ────────────────────────────────────────
@@ -272,8 +336,8 @@ class GalleMLStudio(ctk.CTk):
 
     def _init_app(self):
         """Dipanggil setelah splash selesai — tampilkan main window."""
+        self._apply_icon()
         self.deiconify()
-        self._setup_window_icon()
         self._setup_state()
         self.show_start_screen()
 
