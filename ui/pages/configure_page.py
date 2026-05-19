@@ -470,27 +470,51 @@ class ConfigurePage(BasePage):
         is_suitable = True
         warning_text = ""
 
-        if not pd.api.types.is_numeric_dtype(target_data):
-            if target_data.nunique() / len(target_data) > 0.5:
-                is_suitable = False
-                warning_text = "Peringatan: Terlalu banyak nilai unik — kolom ini mungkin tidak cocok sebagai target."
-
+        # ── Cek kolom tanggal ────────────────────────────────────────────────────
         if "date" in target_col.lower() or "tgl" in target_col.lower():
             try:
                 pd.to_datetime(target_data, errors="raise")
                 is_suitable = False
-                warning_text = "Peringatan: Kolom tanggal tidak cocok sebagai target."
+                warning_text = "⚠️ Kolom tanggal tidak cocok sebagai target."
             except (ValueError, TypeError):
                 pass
 
+        # ── Cek kardinalitas terlalu tinggi ──────────────────────────────────────
+        if is_suitable and not pd.api.types.is_numeric_dtype(target_data):
+            if target_data.nunique() / len(target_data) > 0.5:
+                is_suitable = False
+                warning_text = "⚠️ Terlalu banyak nilai unik — kolom ini mungkin tidak cocok sebagai target."
+
+        # ── Cek klasifikasi: minimal 2 class ─────────────────────────────────────
+        if is_suitable:
+            n_unique = target_data.nunique()
+            task = getattr(self.app, "inferred_task", "")
+
+            # Deteksi task jika belum di-set
+            if task not in ("classification", "regression"):
+                if pd.api.types.is_numeric_dtype(target_data) and n_unique > 20:
+                    task = "regression"
+                else:
+                    task = "classification"
+
+            if task == "classification" and n_unique < 2:
+                is_suitable = False
+                warning_text = (
+                    f"❌ Kolom '{target_col}' hanya memiliki {n_unique} nilai unik.\n"
+                    f"   Klasifikasi membutuhkan minimal 2 kelas."
+                )
+
+        # ── Update warning label ──────────────────────────────────────────────────
         if (
             hasattr(self, "target_warning_label")
             and self.target_warning_label.winfo_exists()
         ):
             self.target_warning_label.configure(
-                text=warning_text if not is_suitable else ""
+                text=warning_text if not is_suitable else "",
+                text_color="#E74C3C" if warning_text.startswith("❌") else "#f39c12",
             )
 
+        # ── Enable/disable tombol Next ────────────────────────────────────────────
         if self._target_next_btn and self._target_next_btn.winfo_exists():
             self._target_next_btn.configure(
                 state="normal" if is_suitable else "disabled"
@@ -932,6 +956,5 @@ class ConfigurePage(BasePage):
         if not getattr(self.app, "inferred_task", None):
             messagebox.showerror("Error", "Please configure training first.")
             return
-        self.app.cancel_training = False
         self.app.run_training()
         self._go_to_main_step(self.ws.MAIN_STEP_TRAIN)

@@ -8,6 +8,7 @@ import os
 import shutil
 import threading
 import joblib
+from PIL import Image
 
 from tkinter import filedialog, messagebox
 
@@ -29,7 +30,7 @@ class GalleMLStudio(ctk.CTk):
     def __init__(self):
 
         super().__init__()
-
+        self._setup_window_icon()
         self.title("Galle ML Studio")
 
         # Set geometry awal sebagai fallback
@@ -37,6 +38,8 @@ class GalleMLStudio(ctk.CTk):
 
         # Maximize window setelah event loop siap
         # (harus via after() agar bekerja di Windows — state("zoomed") di __init__ sering diabaikan)
+        self._show_splash()
+
         def _maximize():
             try:
                 self.state("zoomed")  # Windows: maximize dengan title bar
@@ -51,6 +54,7 @@ class GalleMLStudio(ctk.CTk):
 
         self.after(10, _maximize)
 
+    def _setup_state(self):
         # =====================================================
         # STATE
         # =====================================================
@@ -126,6 +130,153 @@ class GalleMLStudio(ctk.CTk):
 
         self.show_start_screen()
 
+    def _setup_window_icon(self):
+        """Set icon di taskbar dan title bar."""
+        try:
+            icon_path = os.path.join("assets", "logo.ico")
+            if os.path.exists(icon_path):
+                # ← via after() supaya tidak di-override CTk
+                self.after(0, lambda: self.iconbitmap(icon_path))
+            else:
+                png_path = os.path.join("assets", "logo.png")
+                if os.path.exists(png_path):
+                    from PIL import ImageTk
+
+                    img = ImageTk.PhotoImage(file=png_path)
+                    self.after(0, lambda: self.iconphoto(True, img))
+                    self._icon_ref = img
+        except Exception as e:
+            print(f"[icon] {e}")
+
+    def _show_splash(self):
+        """Tampilkan splash screen selama 2.5 detik, lalu lanjut ke app."""
+
+        splash = ctk.CTkToplevel(self)
+        splash.overrideredirect(True)  # hapus title bar
+        splash.attributes("-topmost", True)
+
+        # ── Ukuran & posisi splash ────────────────────────────────────────
+        sw, sh = 420, 300
+        self.update_idletasks()
+        scr_w = self.winfo_screenwidth()
+        scr_h = self.winfo_screenheight()
+        x = scr_w // 2 - sw // 2
+        y = scr_h // 2 - sh // 2
+        splash.geometry(f"{sw}x{sh}+{x}+{y}")
+        splash.configure(fg_color="#1a1a2e")
+
+        # ── Rounded border effect ─────────────────────────────────────────
+        container = ctk.CTkFrame(
+            splash,
+            corner_radius=20,
+            fg_color="#1a1a2e",
+            border_width=1,
+            border_color="#3498db",
+        )
+        container.pack(fill="both", expand=True, padx=2, pady=2)
+
+        # ── Logo image ────────────────────────────────────────────────────
+        logo_path = os.path.join("assets", "splash.png")
+        if not os.path.exists(logo_path):
+            logo_path = os.path.join("assets", "logo.png")
+
+        if os.path.exists(logo_path):
+            logo_img = ctk.CTkImage(
+                light_image=Image.open(logo_path),
+                dark_image=Image.open(logo_path),
+                size=(100, 100),
+            )
+            ctk.CTkLabel(
+                container,
+                image=logo_img,
+                text="",
+            ).pack(pady=(40, 8))
+        else:
+            ctk.CTkLabel(
+                container,
+                text="G",
+                font=ctk.CTkFont(family="Arial", size=64, weight="bold"),
+                text_color="#3498db",
+            ).pack(pady=(40, 8))
+
+        # ── Teks ─────────────────────────────────────────────────────────
+        ctk.CTkLabel(
+            container,
+            text="Galle ML Studio",
+            font=ctk.CTkFont(family="Arial", size=22, weight="bold"),
+            text_color="white",
+        ).pack()
+
+        ctk.CTkLabel(
+            container,
+            text="Professional Machine Learning Workspace",
+            font=ctk.CTkFont(family="Arial", size=12),
+            text_color="gray60",
+        ).pack(pady=(4, 0))
+
+        # ── Loading bar animasi ───────────────────────────────────────────
+        bar_track = ctk.CTkFrame(
+            container,
+            height=4,
+            fg_color="#2d2d2d",
+            corner_radius=2,
+        )
+        bar_track.pack(fill="x", padx=40, pady=(20, 0))
+
+        bar_fill = ctk.CTkFrame(
+            bar_track,
+            height=4,
+            width=0,
+            fg_color="#3498db",
+            corner_radius=2,
+        )
+        bar_fill.place(x=0, y=0)
+
+        ctk.CTkLabel(
+            container,
+            text="v1.0.0",
+            font=ctk.CTkFont(family="Arial", size=10),
+            text_color="gray40",
+        ).pack(pady=(8, 0))
+
+        # ── Animasi loading bar ───────────────────────────────────────────
+        duration_ms = 2500
+        steps = 50
+        interval = duration_ms // steps
+
+        def _animate(step=0):
+            if not splash.winfo_exists():
+                return
+            try:
+                total_w = bar_track.winfo_width() or 340
+                new_w = int((step / steps) * total_w)
+                bar_fill.configure(width=new_w)
+                if step < steps:
+                    splash.after(interval, lambda: _animate(step + 1))
+                else:
+                    splash.after(200, _close_splash)
+            except Exception:
+                _close_splash()
+
+        def _close_splash():
+            try:
+                splash.destroy()
+            except Exception:
+                pass
+            self._init_app()
+
+        splash.after(100, lambda: _animate(0))
+
+        # Sembunyikan main window selama splash
+        self.withdraw()
+
+    def _init_app(self):
+        """Dipanggil setelah splash selesai — tampilkan main window."""
+        self.deiconify()
+        self._setup_window_icon()
+        self._setup_state()
+        self.show_start_screen()
+
     # =========================================================
     # SCREEN
     # =========================================================
@@ -172,9 +323,7 @@ class GalleMLStudio(ctk.CTk):
         projects = self.project_manager.list_projects()
 
         if not projects:
-
             messagebox.showinfo("Info", "No project found.")
-
             return
 
         popup = ctk.CTkToplevel(self)
@@ -184,41 +333,296 @@ class GalleMLStudio(ctk.CTk):
         popup.transient(self)
         popup.lift()
 
-        # Hitung tinggi dinamis berdasarkan jumlah project (min 300, max 600)
-        popup_w = 460
-        popup_h = min(600, max(300, 120 + len(projects) * 62))
+        popup_w = 520
+        popup_h = min(640, max(360, 200 + len(projects) * 62))
 
-        # Center terhadap parent window
         self.update_idletasks()
-        px = self.winfo_rootx()
-        py = self.winfo_rooty()
-        pw = self.winfo_width()
-        ph = self.winfo_height()
-        x = px + (pw // 2) - (popup_w // 2)
-        y = py + (ph // 2) - (popup_h // 2)
+        x = self.winfo_rootx() + self.winfo_width() // 2 - popup_w // 2
+        y = self.winfo_rooty() + self.winfo_height() // 2 - popup_h // 2
         popup.geometry(f"{popup_w}x{popup_h}+{x}+{y}")
+
+        # ── State ─────────────────────────────────────────────────────────────
+        selected_projects = set()  # untuk multi-select delete
+        project_rows = {}  # {name: {"frame": ..., "check_var": ...}}
+
+        # ── Header ───────────────────────────────────────────────────────────
+        header = ctk.CTkFrame(popup, fg_color="transparent")
+        header.pack(fill="x", padx=24, pady=(24, 0))
+        header.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            header,
+            text="📂  Open Project",
+            font=ctk.CTkFont(family="Arial", size=24, weight="bold"),
+        ).grid(row=0, column=0, sticky="w")
+
+        # Mode toggle: Normal / Select
+        mode_var = ctk.StringVar(value="normal")
+
+        select_mode_btn = ctk.CTkButton(
+            header,
+            text="☑ Select",
+            width=90,
+            height=32,
+            fg_color="#3d4045",
+            hover_color="#4a4d52",
+            font=ctk.CTkFont(family="Arial", size=13),
+            command=lambda: _toggle_select_mode(),
+        )
+        select_mode_btn.grid(row=0, column=1, sticky="e")
 
         ctk.CTkLabel(
             popup,
-            text="📂  Open Project",
-            font=ctk.CTkFont(family="Arial", size=26, weight="bold"),
-        ).pack(pady=(30, 20))
+            text=f"{len(projects)} project tersedia",
+            font=ctk.CTkFont(family="Arial", size=12),
+            text_color="gray50",
+        ).pack(anchor="w", padx=26, pady=(4, 8))
 
+        sep = ctk.CTkFrame(popup, height=1, fg_color="#3d4045")
+        sep.pack(fill="x", padx=24, pady=(0, 8))
+
+        # ── Scrollable list ───────────────────────────────────────────────────
         scroll = ctk.CTkScrollableFrame(popup, fg_color="transparent")
-        scroll.pack(fill="both", expand=True, padx=20, pady=(0, 10))
+        scroll.pack(fill="both", expand=True, padx=16, pady=(0, 8))
 
-        for project in projects:
-            ctk.CTkButton(
-                scroll,
-                text=project,
-                width=380,
-                height=48,
-                font=ctk.CTkFont(family="Arial", size=15),
-                fg_color="#2b2d30",
-                hover_color="#3498db",
-                anchor="w",
-                command=lambda p=project: self._load_project(p, popup),
-            ).pack(pady=5)
+        def _build_project_rows():
+            for w in scroll.winfo_children():
+                w.destroy()
+            project_rows.clear()
+
+            current_projects = self.project_manager.list_projects()
+
+            for project in current_projects:
+                is_select_mode = mode_var.get() == "select"
+
+                row_frame = ctk.CTkFrame(
+                    scroll,
+                    corner_radius=10,
+                    fg_color="#2b2d30",
+                    height=56,
+                )
+                row_frame.pack(fill="x", pady=4, padx=4)
+                row_frame.pack_propagate(False)
+                row_frame.grid_columnconfigure(1, weight=1)
+
+                # ── Checkbox (hanya tampil di select mode) ─────────────────
+                check_var = ctk.BooleanVar(value=False)
+
+                check = ctk.CTkCheckBox(
+                    row_frame,
+                    text="",
+                    variable=check_var,
+                    width=28,
+                    checkbox_width=20,
+                    checkbox_height=20,
+                    command=lambda p=project, v=check_var: _on_check(p, v),
+                )
+                if is_select_mode:
+                    check.grid(row=0, column=0, padx=(12, 4), pady=12)
+                else:
+                    check.grid_remove()
+
+                # ── Icon + nama project ───────────────────────────────────
+                name_frame = ctk.CTkFrame(row_frame, fg_color="transparent")
+                name_frame.grid(row=0, column=1, sticky="ew", padx=(8, 0))
+
+                ctk.CTkLabel(
+                    name_frame,
+                    text="📁",
+                    font=ctk.CTkFont(size=18),
+                ).pack(side="left", padx=(8, 6))
+
+                ctk.CTkLabel(
+                    name_frame,
+                    text=project,
+                    font=ctk.CTkFont(family="Arial", size=15, weight="bold"),
+                    anchor="w",
+                ).pack(side="left")
+
+                # ── Tombol Open (hidden di select mode) ───────────────────
+                open_btn = ctk.CTkButton(
+                    row_frame,
+                    text="Open →",
+                    width=80,
+                    height=34,
+                    corner_radius=8,
+                    fg_color="#3498db",
+                    hover_color="#2980b9",
+                    font=ctk.CTkFont(family="Arial", size=13, weight="bold"),
+                    command=lambda p=project: self._load_project(p, popup),
+                )
+                if not is_select_mode:
+                    open_btn.grid(row=0, column=2, padx=(8, 12), pady=10)
+
+                # ── Tombol Delete single (hidden di select mode) ──────────
+                del_btn = ctk.CTkButton(
+                    row_frame,
+                    text="🗑",
+                    width=36,
+                    height=34,
+                    corner_radius=8,
+                    fg_color="#7f1d1d",
+                    hover_color="#991b1b",
+                    font=ctk.CTkFont(size=15),
+                    command=lambda p=project: _delete_single(p),
+                )
+                if not is_select_mode:
+                    del_btn.grid(row=0, column=3, padx=(0, 12), pady=10)
+
+                project_rows[project] = {
+                    "frame": row_frame,
+                    "check_var": check_var,
+                    "check": check,
+                    "open_btn": open_btn,
+                    "del_btn": del_btn,
+                }
+
+        def _toggle_select_mode():
+            if mode_var.get() == "normal":
+                mode_var.set("select")
+                select_mode_btn.configure(
+                    text="✖ Batal",
+                    fg_color="#555",
+                )
+                selected_projects.clear()
+                delete_bar.pack(fill="x", padx=16, pady=(0, 4), before=sep2)
+            else:
+                mode_var.set("normal")
+                select_mode_btn.configure(
+                    text="☑ Select",
+                    fg_color="#3d4045",
+                )
+                selected_projects.clear()
+                delete_bar.pack_forget()
+
+            _build_project_rows()
+            _update_delete_bar()
+
+        def _on_check(project_name, var):
+            if var.get():
+                selected_projects.add(project_name)
+            else:
+                selected_projects.discard(project_name)
+            _update_delete_bar()
+
+        def _update_delete_bar():
+            n = len(selected_projects)
+            if n == 0:
+                delete_selected_btn.configure(
+                    state="disabled",
+                    text="🗑  Hapus yang Dipilih",
+                    fg_color="#7f1d1d",
+                )
+                select_all_btn.configure(text="☑ Pilih Semua")
+            else:
+                delete_selected_btn.configure(
+                    state="normal",
+                    text=f"🗑  Hapus {n} Project",
+                    fg_color="#e74c3c",
+                )
+                all_projects = self.project_manager.list_projects()
+                if len(selected_projects) == len(all_projects):
+                    select_all_btn.configure(text="☐ Batal Semua")
+                else:
+                    select_all_btn.configure(text="☑ Pilih Semua")
+
+        def _toggle_select_all():
+            all_projects = self.project_manager.list_projects()
+            if len(selected_projects) == len(all_projects):
+                # Unselect all
+                selected_projects.clear()
+                for data in project_rows.values():
+                    data["check_var"].set(False)
+            else:
+                # Select all
+                selected_projects.clear()
+                selected_projects.update(all_projects)
+                for name, data in project_rows.items():
+                    data["check_var"].set(True)
+            _update_delete_bar()
+
+        def _delete_single(project_name):
+            confirm = messagebox.askyesno(
+                "Hapus Project",
+                f"Hapus project '{project_name}'?\n\nSemua data akan hilang permanen.",
+                parent=popup,
+            )
+            if not confirm:
+                return
+            try:
+                self.project_manager.delete_project(project_name)
+                _build_project_rows()
+                _update_delete_bar()
+                remaining = self.project_manager.list_projects()
+                ctk.CTkLabel  # refresh count label handled by rebuild
+                if not remaining:
+                    popup.destroy()
+            except Exception as e:
+                messagebox.showerror("Error", f"Gagal menghapus: {e}", parent=popup)
+
+        def _delete_selected():
+            if not selected_projects:
+                return
+            names = "\n".join(f"  • {p}" for p in sorted(selected_projects))
+            confirm = messagebox.askyesno(
+                "Hapus Project",
+                f"Hapus {len(selected_projects)} project berikut?\n\n{names}\n\nSemua data akan hilang permanen.",
+                parent=popup,
+            )
+            if not confirm:
+                return
+            errors = []
+            for project_name in list(selected_projects):
+                try:
+                    self.project_manager.delete_project(project_name)
+                except Exception as e:
+                    errors.append(f"{project_name}: {e}")
+            selected_projects.clear()
+            _build_project_rows()
+            _update_delete_bar()
+            if errors:
+                messagebox.showerror(
+                    "Sebagian Gagal",
+                    "Gagal menghapus:\n" + "\n".join(errors),
+                    parent=popup,
+                )
+            remaining = self.project_manager.list_projects()
+            if not remaining:
+                popup.destroy()
+
+        # ── Delete bar (muncul di select mode) ───────────────────────────────
+        delete_bar = ctk.CTkFrame(popup, fg_color="#1e1e1e", corner_radius=8, height=48)
+        delete_bar.pack_propagate(False)
+        # tidak di-pack dulu, muncul saat select mode aktif
+
+        select_all_btn = ctk.CTkButton(
+            delete_bar,
+            text="☑ Pilih Semua",
+            width=120,
+            height=34,
+            fg_color="#3d4045",
+            hover_color="#4a4d52",
+            font=ctk.CTkFont(family="Arial", size=13),
+            command=_toggle_select_all,
+        )
+        select_all_btn.pack(side="left", padx=(12, 8), pady=7)
+
+        delete_selected_btn = ctk.CTkButton(
+            delete_bar,
+            text="🗑  Hapus yang Dipilih",
+            width=180,
+            height=34,
+            fg_color="#7f1d1d",
+            hover_color="#991b1b",
+            font=ctk.CTkFont(family="Arial", size=13, weight="bold"),
+            state="disabled",
+            command=_delete_selected,
+        )
+        delete_selected_btn.pack(side="right", padx=(8, 12), pady=7)
+
+        # ── Footer ────────────────────────────────────────────────────────────
+        sep2 = ctk.CTkFrame(popup, height=1, fg_color="#3d4045")
+        sep2.pack(fill="x", padx=24, pady=(4, 0))
 
         ctk.CTkButton(
             popup,
@@ -229,7 +633,10 @@ class GalleMLStudio(ctk.CTk):
             hover_color="#4a4d52",
             font=ctk.CTkFont(family="Arial", size=14),
             command=popup.destroy,
-        ).pack(pady=(0, 20))
+        ).pack(pady=(10, 16))
+
+        # ── Initial build ─────────────────────────────────────────────────────
+        _build_project_rows()
 
     def _load_project(self, project_name, popup):
 
@@ -609,8 +1016,7 @@ class GalleMLStudio(ctk.CTk):
             self.cancel_training = False
 
             if self.workspace_screen:
-
-                self.workspace_screen.set_training_state(True)
+                self.after(0, lambda: self.workspace_screen.set_training_state(True))
 
             split_ratio = float(self.train_test_split.split("/")[0]) / 100.0
 
@@ -731,16 +1137,22 @@ class GalleMLStudio(ctk.CTk):
 
                 error_message = str(e)
 
+                def _show_error_and_go_back(msg):
+                    messagebox.showerror("Training Error", msg)
+                    if self.workspace_screen:
+                        self.workspace_screen._go_to_main_step(
+                            self.workspace_screen.MAIN_STEP_CONFIGURE
+                        )
+
                 self.after(
                     0,
-                    lambda msg=error_message: messagebox.showerror(
-                        "Training Error", msg
-                    ),
+                    lambda msg=error_message: _show_error_and_go_back(msg),
                 )
 
         finally:
 
             self.is_training = False
+            self.cancel_training = False
 
             if self.workspace_screen:
 
@@ -794,7 +1206,7 @@ class GalleMLStudio(ctk.CTk):
                     "feature_column_types": self.feature_column_types,
                     "task_type": self.inferred_task,
                     "evaluation_details": safe_detail,
-                    "feature_statistics": feature_statistics,  # ← BARU
+                    "feature_statistics": feature_statistics,
                 },
                 model_path,
             )

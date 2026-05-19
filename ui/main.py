@@ -140,26 +140,47 @@ class WorkspaceScreen:
     #  SIDEBAR
     # =========================================================================
     def _setup_sidebar(self, sidebar):
+
         sidebar.grid_columnconfigure(0, weight=1)
         for r in range(12):
             sidebar.grid_rowconfigure(r, weight=0)
         sidebar.grid_rowconfigure(9, weight=1)
 
-        ctk.CTkLabel(
-            sidebar,
-            text="🎯 ML Workflow",
-            font=ctk.CTkFont(family="Arial", size=28, weight="bold"),
-        ).grid(row=0, column=0, pady=(30, 40))
+        import os
+        from PIL import Image
+
+        logo_path = os.path.join("assets", "logo_with_text_dark_mode.png")
+        if not os.path.exists(logo_path):
+            logo_path = os.path.join("assets", "logo.png")
+
+        if os.path.exists(logo_path):
+            logo_img = ctk.CTkImage(
+                light_image=Image.open(logo_path),
+                dark_image=Image.open(logo_path),
+                size=(160, 58),
+            )
+            ctk.CTkLabel(
+                sidebar,
+                image=logo_img,
+                text="",
+            ).grid(row=0, column=0, pady=(24, 32))
+        else:
+            # Fallback teks
+            ctk.CTkLabel(
+                sidebar,
+                text="🎯 ML Workflow",
+                font=ctk.CTkFont(family="Arial", size=28, weight="bold"),
+            ).grid(row=0, column=0, pady=(30, 40))
 
         self.sidebar_steps = {}
         steps = [
-            ("upload",       "📁 1. Upload Dataset",      None),
-            ("task_selection","🧠 2. Select Task",          None),
-            ("configure",    "⚙️ 3. Configure Training",   None),
-            ("train",        "⚡ 4. Train Models",          "#e74c3c"),
-            ("results",      "📊 5. View Results",          None),
-            ("try_model",    "🧪 6. Try Model",             None),
-            ("export_model", "📦 7. Export Model",          None),
+            ("upload", "📁 1. Upload Dataset", None),
+            ("task_selection", "🧠 2. Select Task", None),
+            ("configure", "⚙️ 3. Configure Training", None),
+            ("train", "⚡ 4. Train Models", "#e74c3c"),
+            ("results", "📊 5. View Results", None),
+            ("try_model", "🧪 6. Try Model", None),
+            ("export_model", "📦 7. Export Model", None),
         ]
         for row_idx, (key, text, color) in enumerate(steps, start=1):
             kw = dict(
@@ -227,8 +248,8 @@ class WorkspaceScreen:
 
         ctk.CTkLabel(
             popup,
-            text=f"Project  \"{project}\"  akan dihapus permanen.\n"
-                 "Semua dataset, model, dan hasil training akan hilang.",
+            text=f'Project  "{project}"  akan dihapus permanen.\n'
+            "Semua dataset, model, dan hasil training akan hilang.",
             font=ctk.CTkFont(family="Arial", size=13),
             text_color="gray60",
             justify="center",
@@ -371,21 +392,50 @@ class WorkspaceScreen:
             command=self._confirm_cancel_training,
         ).pack(pady=(10, 0))
 
-    def set_training_state(self, is_training):
+    def set_training_state(self, is_training: bool):
+
         if is_training:
             self.training_overlay.grid(row=1, column=1, sticky="nsew")
             self.training_overlay.tkraise()
             self.training_start_time = pd.Timestamp.now()
             self._update_training_animation()
-            if self.train_btn and self.train_btn.winfo_exists():
-                self.train_btn.configure(state="disabled")
+
+            # Disable tombol via referensi langsung ke configure_page
+            self._set_train_btn_state("disabled")
+
         else:
+            # Cancel animasi
             if self.training_animation_job:
-                self.training_overlay.after_cancel(self.training_animation_job)
+                try:
+                    self.training_overlay.after_cancel(self.training_animation_job)
+                except Exception:
+                    pass
                 self.training_animation_job = None
+
             self.training_overlay.grid_forget()
+            self.training_overlay.lower()
+
+            self._set_train_btn_state("normal")
+
+    def _set_train_btn_state(self, state: str):
+        try:
+            cp = getattr(self, "_configure_page", None)
+
+            if cp and hasattr(cp, "train_btn"):
+                btn = cp.train_btn
+                if btn and btn.winfo_exists():
+                    btn.configure(state=state)
+                    return
+
+        except Exception as e:
+            print(f"[_set_train_btn_state] {e}")
+
+        # Fallback
+        try:
             if self.train_btn and self.train_btn.winfo_exists():
-                self.train_btn.configure(state="normal")
+                self.train_btn.configure(state=state)
+        except Exception:
+            pass
 
     def _update_training_animation(self):
         if not self.training_start_time:
@@ -452,8 +502,99 @@ class WorkspaceScreen:
     def _do_cancel_training(self, popup):
         popup.destroy()
         self.app.cancel_training = True
-        self.set_training_state(False)
-        self._go_to_main_step(self.MAIN_STEP_CONFIGURE)
+
+        self._set_cancelling_overlay()
+        self._wait_training_done_then_go_configure()
+
+    def _set_cancelling_overlay(self):
+        """Ubah overlay training jadi tampilan 'Membatalkan...'"""
+        # Stop animasi spinner
+        if self.training_animation_job:
+            try:
+                self.training_overlay.after_cancel(self.training_animation_job)
+            except Exception:
+                pass
+            self.training_animation_job = None
+
+        # Update teks spinner dan label
+        if self.training_spinner_label and self.training_spinner_label.winfo_exists():
+            self.training_spinner_label.configure(text="⏹️")
+
+        # Cari label "Training Models..." dan update
+        # Overlay tetap tampil, hanya konten yang berubah
+        container = None
+        for widget in self.training_overlay.winfo_children():
+            if isinstance(widget, ctk.CTkFrame):
+                container = widget
+                break
+
+        if container:
+            for widget in container.winfo_children():
+                try:
+                    text = widget.cget("text")
+                    if "Training Models" in str(text):
+                        widget.configure(text="Membatalkan training...")
+                    elif "Elapsed" in str(text):
+                        widget.configure(
+                            text="Menunggu proses selesai...",
+                            text_color="#f39c12",
+                        )
+                    elif "Cancel" in str(text):
+                        widget.configure(state="disabled", text="Sedang membatalkan...")
+                except Exception:
+                    pass
+
+        # Mulai animasi dots
+        self._cancelling_dots = 0
+        self._update_cancelling_animation()
+
+    def _update_cancelling_animation(self):
+        """Animasi titik-titik saat menunggu cancel selesai."""
+        if not self.app.cancel_training:
+            return
+
+        if not self.training_spinner_label.winfo_exists():
+            return
+
+        spinners = ["⏹️ ", " ⏹️", "⏹️ "]
+        self.training_spinner_label.configure(
+            text=spinners[self._cancelling_dots % len(spinners)]
+        )
+        self._cancelling_dots += 1
+        self._cancelling_animation_job = self.app.after(
+            300, self._update_cancelling_animation
+        )
+
+    def _wait_training_done_then_go_configure(self, attempts=0):
+        """Poll sampai is_training = False, baru pindah ke Configure."""
+        if not self.app.is_training:
+            # Stop animasi cancel
+            if hasattr(self, "_cancelling_animation_job"):
+                try:
+                    self.app.after_cancel(self._cancelling_animation_job)
+                except Exception:
+                    pass
+
+            self.app.cancel_training = False
+            self.set_training_state(False)  # sembunyikan overlay
+            self._go_to_main_step(self.MAIN_STEP_CONFIGURE)
+            return
+
+        if attempts >= 100:
+            if hasattr(self, "_cancelling_animation_job"):
+                try:
+                    self.app.after_cancel(self._cancelling_animation_job)
+                except Exception:
+                    pass
+            self.app.is_training = False
+            self.app.cancel_training = False
+            self.set_training_state(False)
+            self._go_to_main_step(self.MAIN_STEP_CONFIGURE)
+            return
+
+        self.app.after(
+            100, lambda: self._wait_training_done_then_go_configure(attempts + 1)
+        )
 
     # =========================================================================
     #  NAVIGATION
@@ -509,8 +650,13 @@ class WorkspaceScreen:
 
     def _update_sidebar_highlight(self):
         step_names = [
-            "upload", "task_selection", "configure", "train",
-            "results", "try_model", "export_model",
+            "upload",
+            "task_selection",
+            "configure",
+            "train",
+            "results",
+            "try_model",
+            "export_model",
         ]
         for i, name in enumerate(step_names):
             btn = self.sidebar_steps.get(name)

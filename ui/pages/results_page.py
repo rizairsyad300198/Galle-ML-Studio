@@ -16,10 +16,6 @@ class ResultsPage(BasePage):
 
         results = self.app.training_results
 
-        # ── PERBAIKAN UTAMA: all_trained_models tidak wajib ada di sini ───────
-        # Kita hanya butuh results (dari JSON) untuk display metrik.
-        # all_trained_models hanya dibutuhkan saat user mau konfirmasi model
-        # (untuk Try Model / Export). Itu di-handle di _confirm_model_selection.
         all_trained_models = getattr(self.app, "all_trained_models", {})
 
         is_anomaly = getattr(self.app, "inferred_task", "") == "anomaly"
@@ -75,7 +71,6 @@ class ResultsPage(BasePage):
         self.model_buttons = {}
         self.selected_model_name_for_display = None
 
-        # ── Buat tombol tiap model, badge ✅ jika sudah ada di memori ────────
         for model_name in results.keys():
             model_in_memory = model_name in all_trained_models
             badge = "\u2705 " if model_in_memory else "\u26a0\ufe0f "
@@ -302,6 +297,9 @@ class ResultsPage(BasePage):
         if scored_df.empty and hasattr(self.app, "scored_datasets"):
             scored_df = self.app.scored_datasets.get(model_name, pd.DataFrame())
 
+        # ── Ambil feature_statistics dari joblib jika tersedia ────────────────
+        feature_statistics = self._load_feature_statistics(model_name)
+
         status_line = (
             "\u2705 Model tersedia"
             if model_in_memory
@@ -336,6 +334,10 @@ class ResultsPage(BasePage):
                 metrics_text += "\n========== RECOMMENDATIONS ==========\n\n"
                 for item in src.get("recommendations", ["Model appears stable."]):
                     metrics_text += f"\u2022 {item}\n"
+
+                # ── FEATURE STATISTICS SECTION ────────────────────────────
+                metrics_text += self._format_feature_statistics(feature_statistics)
+
                 metrics_text += "\n========== TOP OUTLIER INSPECTION ==========\n\n"
                 if not scored_df.empty:
                     top_outliers = scored_df.nsmallest(20, "outlier_score")
@@ -365,10 +367,120 @@ class ResultsPage(BasePage):
                     else:
                         metrics_text += f"{metric}: {value}\n"
 
+                # ── FEATURE STATISTICS SECTION (non-anomaly) ──────────────
+                metrics_text += self._format_feature_statistics(feature_statistics)
+
         self.metrics_content_label.configure(state="normal")
         self.metrics_content_label.delete("1.0", "end")
         self.metrics_content_label.insert("1.0", metrics_text)
         self.metrics_content_label.configure(state="disabled")
+
+    # =========================================================
+    # HELPER: Load feature_statistics dari joblib
+    # =========================================================
+
+    def _load_feature_statistics(self, model_name: str) -> dict:
+        """
+        Load feature_statistics dari file .joblib model.
+        Return dict kosong jika tidak tersedia.
+        """
+        import os
+        import joblib
+
+        try:
+            project_name = getattr(self.app, "current_project", None)
+            if not project_name:
+                return {}
+
+            model_path = os.path.join(
+                "projects",
+                project_name,
+                "artifacts",
+                f"{model_name}_selected_model.joblib",
+            )
+
+            if not os.path.exists(model_path):
+                return {}
+
+            loaded = joblib.load(model_path)
+            return loaded.get("feature_statistics", {})
+
+        except Exception as e:
+            print(f"[_load_feature_statistics] Gagal load: {e}")
+            return {}
+
+    # =========================================================
+    # HELPER: Format feature_statistics jadi text display
+    # =========================================================
+
+    def _format_feature_statistics(self, feature_statistics: dict) -> str:
+
+        if not feature_statistics:
+            return (
+                "\n========== FEATURE STATISTICS ==========\n\n"
+                "(Tidak tersedia — model lama, re-train untuk generate statistik)\n"
+            )
+
+        lines = []
+        lines.append(
+            "\n========== FEATURE STATISTICS (dari Training Data) ==========\n"
+        )
+        lines.append("Batas normal = mean ± 2×std  |  nilai negatif di-clamp ke 0\n\n")
+
+        col_feature = 30
+        col_mean = 18
+        col_std = 16
+        col_min = 16
+        col_max = 16
+
+        header = (
+            f"{'Feature':<{col_feature}}"
+            f"{'Mean':>{col_mean}}"
+            f"{'Std':>{col_std}}"
+            f"{'Normal Min':>{col_min}}"
+            f"{'Normal Max':>{col_max}}"
+        )
+        separator = "-" * (col_feature + col_mean + col_std + col_min + col_max)
+
+        lines.append(header)
+        lines.append(separator)
+
+        def _fmt(val: float) -> str:
+            """Format angka besar jadi readable: 1,234,567.89 atau scientific jika sangat besar."""
+            abs_val = abs(val)
+            if abs_val == 0:
+                return "0.00"
+            elif abs_val >= 1_000_000_000:
+                return f"{val/1_000_000_000:.2f}B"
+            elif abs_val >= 1_000_000:
+                return f"{val/1_000_000:.2f}M"
+            elif abs_val >= 1_000:
+                return f"{val/1_000:.2f}K"
+            elif abs_val >= 1:
+                return f"{val:,.4f}"
+            else:
+                return f"{val:.6f}"
+
+        for feature, stats in feature_statistics.items():
+            mean = stats.get("mean", 0)
+            std = stats.get("std", 0)
+            normal_min = max(0, stats.get("normal_min", 0))  # clamp negatif ke 0
+            normal_max = stats.get("normal_max", 0)
+
+            row = (
+                f"{feature:<{col_feature}}"
+                f"{_fmt(mean):>{col_mean}}"
+                f"{_fmt(std):>{col_std}}"
+                f"{_fmt(normal_min):>{col_min}}"
+                f"{_fmt(normal_max):>{col_max}}"
+            )
+            lines.append(row)
+
+        lines.append(separator)
+        lines.append(f"Total features: {len(feature_statistics)}\n")
+        lines.append("Satuan: B=Miliar, M=Juta, K=Ribu\n")
+
+        return "\n".join(lines) + "\n"
 
     def _confirm_model_selection(self):
         if not self.selected_model_name_for_display:
