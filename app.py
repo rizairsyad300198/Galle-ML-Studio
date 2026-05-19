@@ -1,16 +1,3 @@
-# ================================
-# app.py  (FIXED)
-# ================================
-import ctypes
-
-try:
-    ctypes.windll.shcore.SetProcessDpiAwareness(2)
-except Exception:
-    try:
-        ctypes.windll.user32.SetProcessDPIAware()
-    except Exception:
-        pass
-
 import customtkinter as ctk
 import pandas as pd
 import os
@@ -40,27 +27,24 @@ class GalleMLStudio(ctk.CTk):
 
         super().__init__()
         self.title("Galle ML Studio")
-
-        # Set geometry awal sebagai fallback
         self.geometry("1600x950")
-
-        # Maximize window setelah event loop siap
+        self.withdraw()
         self._apply_icon()
         self._show_splash()
 
-        def _maximize():
-            try:
-                self.state("zoomed")  # Windows: maximize dengan title bar
-            except Exception:
-                try:
-                    self.attributes("-zoomed", True)  # Linux (GNOME/XFCE/KDE)
-                except Exception:
-                    # Fallback manual: set ke ukuran layar penuh
-                    sw = self.winfo_screenwidth()
-                    sh = self.winfo_screenheight()
-                    self.geometry(f"{sw}x{sh}+0+0")
+        # def _maximize():
+        #     try:
+        #         self.state("zoomed")  # Windows: maximize dengan title bar
+        #     except Exception:
+        #         try:
+        #             self.attributes("-zoomed", True)  # Linux (GNOME/XFCE/KDE)
+        #         except Exception:
+        #             # Fallback manual: set ke ukuran layar penuh
+        #             sw = self.winfo_screenwidth()
+        #             sh = self.winfo_screenheight()
+        #             self.geometry(f"{sw}x{sh}+0+0")
 
-        self.after(10, _maximize)
+        # self.after(10, _maximize)
 
     def _setup_state(self):
         # =====================================================
@@ -214,7 +198,6 @@ class GalleMLStudio(ctk.CTk):
 
     def _show_splash(self):
         """Tampilkan splash screen selama 2.5 detik, lalu lanjut ke app."""
-
         splash = ctk.CTkToplevel(self)
         splash.overrideredirect(True)
         splash.attributes("-topmost", True)
@@ -335,11 +318,11 @@ class GalleMLStudio(ctk.CTk):
         self.withdraw()
 
     def _init_app(self):
-        """Dipanggil setelah splash selesai — tampilkan main window."""
-        self._apply_icon()
         self.deiconify()
+        self.state("zoomed")
+        self.update()
+        self._apply_icon()
         self._setup_state()
-        self.show_start_screen()
 
     # =========================================================
     # SCREEN
