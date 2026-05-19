@@ -124,78 +124,242 @@ class ExportPage(BasePage):
                 messagebox.showerror("Error", f"Failed to copy model file: {e}")
 
     def _generate_python_example(self):
+
+        # ── guard checks (unchanged) ──────────────────────────────────────────
         if (
             not hasattr(self.app, "selected_best_model_path")
             or not self.app.selected_best_model_path
         ):
+            from tkinter import messagebox
+
             messagebox.showerror("Error", "No selected model path available.")
             return
+
         if not hasattr(self.app, "selected_features") or not self.app.selected_features:
+            from tkinter import messagebox
+
             messagebox.showerror("Error", "Selected features not available.")
             return
+
         if not hasattr(self.app, "inferred_task") or not self.app.inferred_task:
+            from tkinter import messagebox
+
             messagebox.showerror("Error", "Inferred task type not available.")
             return
 
-        lines = [
-            "import joblib",
-            "import pandas as pd",
-            "",
-            f'model_path = r"{self.app.selected_best_model_path}"',
-            "loaded_data = joblib.load(model_path)",
-            "pipeline = loaded_data['pipeline']",
-            "label_encoder = loaded_data.get('label_encoder')",
-            "",
-            f"features = {self.app.selected_features}",
-            "",
-            "input_data = {",
-        ]
-        for feature in self.app.selected_features:
-            if pd.api.types.is_numeric_dtype(self.app.df[feature].dtype):
-                lines.append(f"    '{feature}': [0.0],")
-            elif self.app.df[feature].dtype in ("object", "category"):
-                first_val = (
-                    str(self.app.df[feature].dropna().iloc[0])
-                    if not self.app.df[feature].dropna().empty
-                    else "example_category"
-                )
-                lines.append(f"    '{feature}': ['{first_val}'],")
-            else:
-                lines.append(f"    '{feature}': ['example_value'],")
+        import pandas as pd
 
         task = self.app.inferred_task
-        lines += [
-            "}",
-            "",
-            "input_df = pd.DataFrame(input_data, columns=features)",
-            "prediction = pipeline.predict(input_df)[0]",
-            "print(f'Raw Prediction: {prediction}')",
-            "",
-            f"if '{task}' == 'anomaly':",
-            "    print('Result: Anomaly Detected' if prediction == -1 else 'Result: Normal')",
-            f"elif '{task}' == 'classification' and label_encoder is not None:",
-            "    decoded = label_encoder.inverse_transform([int(prediction)])[0]",
-            "    print(f'Decoded Prediction: {decoded}')",
-            f"elif '{task}' == 'regression':",
-            "    print(f'Regression Prediction: {prediction:.2f}')",
-        ]
-        example_code = "\n".join(lines)
+        features = self.app.selected_features
+        model_path = self.app.selected_best_model_path
+
+        # ── AML-specific sensible defaults ───────────────────────────────────
+        normal_defaults = {
+            "txn_income_ratio": 0.08,
+            "fee_ratio": 0.01,
+            "portfolio_impact": 0.05,
+            "investor_age_days": 1200,
+            "days_since_last_txn": 14,
+            "txn_count_sid": 18,
+            "rolling_avg_txn": 12_000_000,
+            "rolling_std_txn": 2_500_000,
+            "txn_velocity_score": 0.75,
+            "txn_acceleration": 1.05,
+            "behavioral_volatility": 0.80,
+            "txn_gap_zscore": 0.40,
+            "rapid_txn": 0,
+            "txn_month": 8,
+            "txn_dayofweek": 2,
+            "txn_is_month_end": 0,
+        }
+
+        # ── build sample input dict lines ────────────────────────────────────
+        input_lines = []
+        for feature in features:
+            if feature in normal_defaults:
+                val = repr(normal_defaults[feature])
+            elif pd.api.types.is_numeric_dtype(self.app.df[feature].dtype):
+                val = "0.0"
+            elif self.app.df[feature].dtype in ("object", "category"):
+                first = (
+                    repr(str(self.app.df[feature].dropna().iloc[0]))
+                    if not self.app.df[feature].dropna().empty
+                    else "'example_category'"
+                )
+                val = first
+            else:
+                val = "'example_value'"
+            input_lines.append(f'    "{feature}": {val},')
+
+        sample_input_block = "\n".join(input_lines)
+
+        # ── task-specific prediction block ───────────────────────────────────
+        if task == "anomaly":
+            prediction_block = """\
+        # ── predict ──────────────────────────────────────────────────────────
+        raw_label     = model.predict(input_df)[0]           # 1 = normal, -1 = outlier
+        anomaly_score = model.decision_function(input_df)[0] # lower = more suspicious
+    
+        prediction_result = "outlier" if raw_label == -1 else "normal"
+    
+        # ── severity ─────────────────────────────────────────────────────────
+        score = float(anomaly_score)
+        if raw_label == 1:
+            severity = "normal"
+        elif score < -0.22:
+            severity = "critical"
+        elif score < -0.18:
+            severity = "high"
+        elif score < -0.12:
+            severity = "medium"
+        else:
+            severity = "low"
+    
+        response = {
+            "prediction":    prediction_result,
+            "anomaly_score": round(score, 6),
+            "severity":      severity,
+            "raw_label":     int(raw_label),
+        }"""
+
+        elif task == "classification":
+            prediction_block = """\
+        # ── predict ──────────────────────────────────────────────────────────
+        raw_pred = model.predict(input_df)[0]
+    
+        if label_encoder is not None:
+            prediction_result = label_encoder.inverse_transform([int(raw_pred)])[0]
+        else:
+            prediction_result = raw_pred
+    
+        response = {
+            "prediction": str(prediction_result),
+            "raw_label":  int(raw_pred),
+        }"""
+
+        else:  # regression
+            prediction_block = """\
+        # ── predict ──────────────────────────────────────────────────────────
+        predicted_value = float(model.predict(input_df)[0])
+    
+        response = {
+            "prediction": round(predicted_value, 4),
+        }"""
+
+        # ── assemble full example code ────────────────────────────────────────
+        example_code = f'''\
+    import joblib
+    import pandas as pd
+    
+    # =====================================================
+    # MODEL PATH  — update sesuai lokasi file .joblib kamu
+    # =====================================================
+    MODEL_PATH = r"{model_path}"
+    
+    # =====================================================
+    # LAZY LOAD  — load sekali, reuse setiap request
+    # =====================================================
+    _pipeline      = None
+    _label_encoder = None
+    
+    
+    def load_model():
+        global _pipeline, _label_encoder
+        if _pipeline is None:
+            loaded      = joblib.load(MODEL_PATH)
+            _pipeline   = loaded["pipeline"]
+            _label_encoder = loaded.get("label_encoder")
+        return _pipeline, _label_encoder
+    
+    
+    # =====================================================
+    # INFERENCE FUNCTION
+    # =====================================================
+    def run_inference(raw_data: dict) -> dict:
+        """
+        Parameters
+        ----------
+        raw_data : dict
+            Feature dict sesuai kolom yang dipakai saat training.
+            Contoh: {{"txn_income_ratio": 0.08, "fee_ratio": 0.01, ...}}
+    
+        Returns
+        -------
+        dict  dengan key: prediction, anomaly_score, severity, raw_label
+        """
+        model, label_encoder = load_model()
+    
+        input_df = pd.DataFrame([raw_data])
+    
+    {prediction_block}
+    
+        return response
+    
+    
+    # =====================================================
+    # CONTOH PEMAKAIAN
+    # =====================================================
+    if __name__ == "__main__":
+    
+        sample_input = {{
+    {sample_input_block}
+        }}
+    
+        result = run_inference(sample_input)
+    
+        print("Prediction    :", result["prediction"])
+        print("Anomaly Score :", result.get("anomaly_score", "-"))
+        print("Severity      :", result.get("severity", "-"))
+        print("Full response :", result)
+    '''
+
+        # ── show popup (unchanged UI pattern) ─────────────────────────────────
+        import customtkinter as ctk
 
         code_window = ctk.CTkToplevel(self.app)
         code_window.title("Python Usage Example")
-        code_window.geometry("800x600")
+        code_window.geometry("900x700")
         code_window.grab_set()
 
         textbox = ctk.CTkTextbox(
-            code_window, wrap="word", font=("Consolas", 12), border_spacing=12
+            code_window,
+            wrap="word",
+            font=("Consolas", 12),
+            border_spacing=12,
         )
         textbox.pack(fill="both", expand=True, padx=10, pady=10)
         textbox.insert("1.0", example_code)
         textbox.configure(state="disabled")
 
-        ctk.CTkButton(code_window, text="Tutup", command=code_window.destroy).pack(
-            pady=10
+        # ── copy to clipboard button ───────────────────────────────────────────
+        def copy_to_clipboard():
+            code_window.clipboard_clear()
+            code_window.clipboard_append(example_code)
+            code_window.update()
+            copy_btn.configure(text="✅  Copied!")
+            code_window.after(2000, lambda: copy_btn.configure(text="📋  Copy Code"))
+
+        btn_frame = ctk.CTkFrame(code_window, fg_color="transparent")
+        btn_frame.pack(pady=(0, 10))
+
+        copy_btn = ctk.CTkButton(
+            btn_frame,
+            text="📋  Copy Code",
+            width=160,
+            fg_color="#3498db",
+            hover_color="#2980b9",
+            command=copy_to_clipboard,
         )
+        copy_btn.grid(row=0, column=0, padx=8)
+
+        ctk.CTkButton(
+            btn_frame,
+            text="Tutup",
+            width=120,
+            fg_color="gray40",
+            hover_color="gray30",
+            command=code_window.destroy,
+        ).grid(row=0, column=1, padx=8)
 
     # ─────────────────────────────────────────────────────────────────────────
     #  METRICS POPUP

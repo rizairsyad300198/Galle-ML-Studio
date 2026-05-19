@@ -39,6 +39,7 @@ from xgboost import XGBClassifier, XGBRegressor
 from pyod.models.hbos import HBOS
 
 from sklearn.base import BaseEstimator, TransformerMixin
+from helper.helper import _extract_feature_statistics
 
 # =========================================================
 # MODEL CONFIG
@@ -1247,10 +1248,6 @@ class MLTrainer:
         self.best_model_name = best_model
         print(f"BEST MODEL: {self.best_model_name} ({metric_key}: {best_score})")
 
-    # =====================================================
-    # SAVE
-    # =====================================================
-
     def save_best_model(self, project_name):
 
         if (
@@ -1259,27 +1256,43 @@ class MLTrainer:
         ):
             return None
 
-        artifacts_dir = os.path.join(
-            "projects",
-            project_name,
-            "artifacts",
-        )
-
+        artifacts_dir = os.path.join("projects", project_name, "artifacts")
         os.makedirs(artifacts_dir, exist_ok=True)
 
-        model_path = os.path.join(artifacts_dir, f"{self.best_model_name}_model.joblib")
-
-        joblib.dump(
-            {
-                "pipeline": self.all_trained_models[self.best_model_name],
-                "label_encoder": self.label_encoder,
-                "datetime_cols": self.datetime_cols,
-                "evaluation_details": self.model_evaluation_details.get(
-                    self.best_model_name
-                ),
-            },
-            model_path,
+        model_path = os.path.join(
+            artifacts_dir,
+            f"{self.best_model_name}_selected_model.joblib",
         )
+
+        pipeline = _sanitize_pipeline(self.all_trained_models[self.best_model_name])
+
+        safe_label_encoder = None
+        if self.task_type != "anomaly" and self.label_encoder is not None:
+            safe_label_encoder = {
+                "classes": [str(c) for c in self.label_encoder.classes_]
+            }
+
+        # ── feature_statistics: ekstrak dari StandardScaler ───────────────────
+        feature_statistics = _extract_feature_statistics(pipeline)
+
+        export_payload = {
+            "pipeline": pipeline,
+            "label_encoder": safe_label_encoder,
+            "datetime_cols": list(self.datetime_cols),
+            "task_type": self.task_type,
+            "feature_statistics": feature_statistics,  # ← BARU
+        }
+
+        joblib.dump(export_payload, model_path)
+
+        print("\n======================================")
+        print("MODEL EXPORT SUCCESS")
+        print("======================================")
+        print(f"Model Path : {model_path}")
+        print(f"Task Type  : {self.task_type}")
+        if feature_statistics:
+            print(f"Feature Stats : {len(feature_statistics)} features tersimpan")
+        print("======================================")
 
         return model_path
 
@@ -1314,3 +1327,37 @@ def get_available_models(task_type):
         ]
 
     return []
+
+
+def _sanitize_pipeline(pipeline):
+    import numpy as np
+
+    for _, step in pipeline.steps:
+
+        # ── IsolationForest: hapus training cache via __dict__ langsung ──
+        if hasattr(step, "estimators_"):
+            for estimator in step.estimators_:
+                # Hapus via __dict__ karena estimators_samples_ adalah property read-only
+                estimator.__dict__.pop("estimators_samples_", None)
+            step.__dict__.pop("estimators_samples_", None)
+
+        # ── ColumnTransformer ────────────────────────────────────────────
+        if not hasattr(step, "transformers_"):
+            continue
+
+        for _, transformer, _ in step.transformers_:
+            if not hasattr(transformer, "steps"):
+                continue
+            for _, t in transformer.steps:
+                if hasattr(t, "statistics_"):
+                    t.statistics_ = np.array(t.statistics_)
+                if hasattr(t, "categories_"):
+                    t.categories_ = [np.array(c, dtype=object) for c in t.categories_]
+                if hasattr(t, "mean_"):
+                    t.mean_ = np.array(t.mean_)
+                if hasattr(t, "scale_"):
+                    t.scale_ = np.array(t.scale_)
+                if hasattr(t, "var_"):
+                    t.var_ = np.array(t.var_)
+
+    return pipeline

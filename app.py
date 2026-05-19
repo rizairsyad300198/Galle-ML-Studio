@@ -18,6 +18,7 @@ from core.trainer import (
 )
 
 from ui.main import StartScreen, WorkspaceScreen
+from helper.helper import _extract_feature_statistics
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -756,7 +757,6 @@ class GalleMLStudio(ctk.CTk):
         """Simpan satu model ke artifacts folder."""
 
         artifacts_dir = os.path.join("projects", self.current_project, "artifacts")
-
         os.makedirs(artifacts_dir, exist_ok=True)
 
         model_path = os.path.join(
@@ -765,14 +765,36 @@ class GalleMLStudio(ctk.CTk):
         )
 
         try:
+            from core.trainer import _sanitize_pipeline
+
+            clean_pipeline = _sanitize_pipeline(pipeline)
+
+            # ── label_encoder ─────────────────────────────────────────────────
+            safe_label_encoder = None
+            if self.label_encoder is not None:
+                try:
+                    safe_label_encoder = {
+                        "classes": [str(c) for c in self.label_encoder.classes_]
+                    }
+                except Exception:
+                    safe_label_encoder = None
+
+            # ── evaluation_details: buang scored_dataset ──────────────────────
+            raw_detail = self.model_evaluation_details.get(model_name, {})
+            safe_detail = {k: v for k, v in raw_detail.items() if k != "scored_dataset"}
+
+            # ── feature_statistics: ekstrak dari StandardScaler ───────────────
+            feature_statistics = _extract_feature_statistics(clean_pipeline)
 
             joblib.dump(
                 {
-                    "pipeline": pipeline,
-                    "label_encoder": self.label_encoder,
-                    "datetime_cols": self.datetime_cols_for_prediction,
+                    "pipeline": clean_pipeline,
+                    "label_encoder": safe_label_encoder,
+                    "datetime_cols": list(self.datetime_cols_for_prediction),
                     "feature_column_types": self.feature_column_types,
-                    "evaluation_details": self.model_evaluation_details.get(model_name),
+                    "task_type": self.inferred_task,
+                    "evaluation_details": safe_detail,
+                    "feature_statistics": feature_statistics,  # ← BARU
                 },
                 model_path,
             )
@@ -780,9 +802,7 @@ class GalleMLStudio(ctk.CTk):
             return model_path
 
         except Exception as e:
-
             print(f"Save model artifact error ({model_name}): {e}")
-
             return None
 
     def set_selected_best_model(self, model_name, model_pipeline):
